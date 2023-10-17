@@ -369,3 +369,4 @@ sweep/
 android/pytorch_android/.cxx
 android/pytorch_android_torchvision/.cxx
 experiment_deepspeed
+1_deepspeed_full_finetune/1_1_vanilla_deepspeed/bert_*
