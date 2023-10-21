@@ -53,15 +53,9 @@ def log_dist(message: str, ranks: List[int] = [], level: int = logging.INFO) -> 
             logger.debug(f"[Rank {my_rank}] {message}")
 
 
-######################################################################
-############### Dataset Creation Related Functions ###################
-######################################################################
-
-TokenizerType = Union[PreTrainedTokenizer, PreTrainedTokenizerFast]
-
-
 def collate_function(
-    batch: List[Tuple[List[int], List[int]]], pad_token_id: int
+    batch: List[Tuple[List[int], List[int]]],
+    pad_token_id: int,
 ) -> Dict[str, torch.Tensor]:
     """Collect a list of masked token indices, and labels, and
     batch them, padding to max length in the batch.
@@ -87,7 +81,7 @@ def collate_function(
 
 def masking_function(
     text: str,
-    tokenizer: TokenizerType,
+    tokenizer: AutoTokenizer,
     mask_prob: float,
     random_replace_prob: float,
     unmask_replace_prob: float,
@@ -210,18 +204,15 @@ class WikiTextMLMDataset(Dataset):
         return (tokens, labels)
 
 
-T = TypeVar("T")
-
-
 class InfiniteIterator:
-    def __init__(self, iterable: Iterable[T]) -> None:
+    def __init__(self, iterable: Iterable) -> None:
         self._iterable = iterable
         self._iterator = iter(self._iterable)
 
     def __iter__(self):
         return self
 
-    def __next__(self) -> T:
+    def __next__(self):
         next_item = None
         try:
             next_item = next(self._iterator)
@@ -277,7 +268,10 @@ def create_data_iterator(
     dataset = WikiTextMLMDataset(wikitext_dataset, masking_function_partial)
     collate_fn_partial = partial(collate_function, pad_token_id=tokenizer.pad_token_id)
     dataloader = DataLoader(
-        dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn_partial
+        dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        collate_fn=collate_fn_partial,
     )
 
     return InfiniteIterator(dataloader)
@@ -429,11 +423,6 @@ def create_model(
     return roberta_model
 
 
-######################################################################
-########### Experiment Management Related Functions ##################
-######################################################################
-
-
 def get_unique_identifier(length: int = 8) -> str:
     """Create a unique identifier by choosing `length`
     random characters from list of ascii characters and numbers
@@ -485,45 +474,8 @@ def create_experiment_dir(
     hparams_file = exp_dir / "hparams.json"
     with hparams_file.open("w") as handle:
         json.dump(obj=all_arguments, fp=handle, indent=2)
-    # Save the git hash
-    # try:
-    #     gitlog = sh.git.log("-1", format="%H", _tty_out=False, _fg=False)
-    #     with (exp_dir / "githash.log").open("w") as handle:
-    #         handle.write(gitlog.stdout.decode("utf-8"))
-    # except sh.ErrorReturnCode_128:
-    #     log_dist(
-    #         "Seems like the code is not running from"
-    #         " within a git repo, so hash will"
-    #         " not be stored. However, it"
-    #         " is strongly advised to use"
-    #         " version control.",
-    #         ranks=[0],
-    #         level=logging.INFO,
-    #     )
-    # And the git diff
-    # try:
-    #     gitdiff = sh.git.diff(_fg=False, _tty_out=False)
-    #     with (exp_dir / "gitdiff.log").open("w") as handle:
-    #         handle.write(gitdiff.stdout.decode("utf-8"))
-    # except sh.ErrorReturnCode_129:
-    #     log_dist(
-    #         "Seems like the code is not running from"
-    #         " within a git repo, so diff will"
-    #         " not be stored. However, it"
-    #         " is strongly advised to use"
-    #         " version control.",
-    #         ranks=[0],
-    #         level=logging.INFO,
-    #     )
-    # Finally create the Tensorboard Dir
-    tb_dir = exp_dir / "tb_dir"
-    tb_dir.mkdir(exist_ok=False)
+
     return exp_dir
-
-
-######################################################################
-################ Checkpoint Related Functions ########################
-######################################################################
 
 
 def load_model_checkpoint(
@@ -583,11 +535,6 @@ def load_model_checkpoint(
         level=logging.INFO,
     )
     return checkpoint_step, model, optimizer
-
-
-######################################################################
-######################## Driver Functions ############################
-######################################################################
 
 
 def train(
@@ -740,7 +687,7 @@ def train(
         num_iterations = max(num_iterations, _num_iterations)
         checkpoint_every = hparams.get("checkpoint_every", checkpoint_every)
         exp_dir = load_checkpoint_dir
-        
+
     ################################
     ###### Create Datasets #########
     ################################
@@ -817,7 +764,7 @@ def train(
             log_dist(
                 "Loss: {0:.4f}".format(np.mean(losses)), ranks=[0], level=logging.INFO
             )
-            
+
         if step % checkpoint_every == 0:
             model.save_checkpoint(
                 save_dir=exp_dir, client_state={"checkpoint_step": step}
