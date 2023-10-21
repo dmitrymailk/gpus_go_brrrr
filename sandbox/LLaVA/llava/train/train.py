@@ -869,7 +869,7 @@ def train():
 
         bnb_model_from_pretrained_args.update(
             dict(
-                device_map={"": training_args.device},
+                # device_map={"": training_args.device},
                 load_in_4bit=training_args.bits == 4,
                 load_in_8bit=training_args.bits == 8,
                 quantization_config=BitsAndBytesConfig(
@@ -884,18 +884,20 @@ def train():
             )
         )
 
-    if model_args.vision_tower is not None:
-        model = LlavaLlamaForCausalLM.from_pretrained(
-            model_args.model_name_or_path,
-            cache_dir=training_args.cache_dir,
-            **bnb_model_from_pretrained_args,
-        )
-    else:
-        model = transformers.LlamaForCausalLM.from_pretrained(
-            model_args.model_name_or_path,
-            cache_dir=training_args.cache_dir,
-            **bnb_model_from_pretrained_args,
-        )
+    model = LlavaLlamaForCausalLM.from_pretrained(
+        model_args.model_name_or_path,
+        cache_dir=training_args.cache_dir,
+        **bnb_model_from_pretrained_args,
+        # load_in_8bit=True,
+    )
+    # return
+    # model = transformers.AutoModelForCausalLM.from_pretrained(
+    #     model_args.model_name_or_path,
+    #     cache_dir=training_args.cache_dir,
+    #     **bnb_model_from_pretrained_args,
+    #     # load_in_8bit=True,
+    # )
+
     model.config.use_cache = False
 
     if model_args.freeze_backbone:
@@ -910,8 +912,12 @@ def train():
             else (torch.bfloat16 if training_args.bf16 else torch.float32)
         )
         model = prepare_model_for_kbit_training(
-            model, use_gradient_checkpointing=training_args.gradient_checkpointing
+            model,
+            use_gradient_checkpointing=training_args.gradient_checkpointing,
         )
+        # model = custom_prepare_model_for_int8_training(
+        #     model, use_gradient_checkpointing=training_args.gradient_checkpointing
+        # )
 
     if training_args.gradient_checkpointing:
         if hasattr(model, "enable_input_require_grads"):
@@ -963,7 +969,6 @@ def train():
     if model_args.vision_tower is not None:
         model.get_model().initialize_vision_modules(
             model_args=model_args,
-            fsdp=training_args.fsdp,
         )
 
         vision_tower = model.get_vision_tower()
