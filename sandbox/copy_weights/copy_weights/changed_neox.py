@@ -612,8 +612,7 @@ class GPTNeoXModel(GPTNeoXPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        # my params
-        layer_iterations: int = 1,
+        layer_iterations: int = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         r"""
         past_key_values (`tuple(tuple(torch.FloatTensor))` of length `config.n_layers` with each tuple having 4 tensors of shape `(batch_size, num_heads, sequence_length - 1, embed_size_per_head)`):
@@ -665,7 +664,9 @@ class GPTNeoXModel(GPTNeoXPreTrainedModel):
             position_ids = torch.arange(
                 past_length, seq_length + past_length, dtype=torch.long, device=device
             )
-            position_ids = position_ids.unsqueeze(0)
+            position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
+        else:
+            position_ids = position_ids.view(-1, seq_length).long()
 
         # Attention mask.
         if attention_mask is not None:
@@ -709,20 +710,24 @@ class GPTNeoXModel(GPTNeoXPreTrainedModel):
         all_attentions = () if output_attentions else None
         all_hidden_states = () if output_hidden_states else None
         for i, (layer, layer_past) in enumerate(zip(self.layers, past_key_values)):
-            # print(f"Layer #{i}")
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
 
             if self.gradient_checkpointing and self.training:
-                outputs = self.gradient_checkpointing_func(
-                    layer.__call__,
+
+                def create_custom_forward(module):
+                    def custom_forward(*inputs):
+                        # None for layer_past
+                        return module(*inputs, use_cache, None, output_attentions)
+
+                    return custom_forward
+
+                outputs = torch.utils.checkpoint.checkpoint(
+                    create_custom_forward(layer),
                     hidden_states,
                     attention_mask,
                     position_ids,
                     head_mask[i],
-                    use_cache,
-                    None,
-                    output_attentions,
                 )
             else:
                 outputs = layer(
@@ -740,7 +745,7 @@ class GPTNeoXModel(GPTNeoXPreTrainedModel):
             if output_attentions:
                 all_attentions = all_attentions + (outputs[2 if use_cache else 1],)
 
-            if (i + 1) > layer_iterations:
+            if i > layer_iterations:
                 break
 
         hidden_states = self.final_layer_norm(hidden_states)

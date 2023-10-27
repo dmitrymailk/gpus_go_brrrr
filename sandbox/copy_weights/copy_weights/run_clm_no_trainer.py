@@ -56,6 +56,8 @@ from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
 from copy_weights.changed_neox import GPTNeoXForCausalLM
+# from transformers import GPTNeoXForCausalLM
+from copy_weights.train_loops import experiment_2, experiment_3, experiment_1
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 # check_min_version("4.35.0.dev0")
@@ -348,6 +350,7 @@ def main():
     config = AutoConfig.from_pretrained(
         args.config_name,
     )
+    # config.num_hidden_layers = 6
 
     tokenizer = AutoTokenizer.from_pretrained(
         args.tokenizer_name,
@@ -358,6 +361,7 @@ def main():
     model = GPTNeoXForCausalLM._from_config(
         config,
     )
+    print("MODEL", model)
 
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
     # on a small vocab and want a smaller embedding size, remove this test.
@@ -555,100 +559,22 @@ def main():
     # update the progress_bar if load from checkpoint
     progress_bar.update(completed_steps)
 
-    for epoch in range(starting_epoch, args.num_train_epochs):
-        model.train()
-        if args.with_tracking:
-            total_loss = 0
-
-        active_dataloader = train_dataloader
-        for step, batch in enumerate(active_dataloader):
-            with accelerator.accumulate(model):
-                outputs = model(**batch, layer_iterations=2)
-                loss = outputs.loss
-                # We keep track of the loss at each epoch
-                if args.with_tracking:
-                    total_loss += loss.detach().float()
-                    accelerator.log(
-                        {
-                            "train_loss_step": loss.detach().float(),
-                        },
-                        step=completed_steps,
-                    )
-                accelerator.backward(loss)
-                optimizer.step()
-                lr_scheduler.step()
-                optimizer.zero_grad()
-
-            # Checks if the accelerator has performed an optimization step behind the scenes
-            if accelerator.sync_gradients:
-                progress_bar.update(1)
-                completed_steps += 1
-
-            if isinstance(checkpointing_steps, int):
-                if completed_steps % checkpointing_steps == 0:
-                    output_dir = f"step_{completed_steps}"
-                    if args.output_dir is not None:
-                        output_dir = os.path.join(args.output_dir, output_dir)
-                    accelerator.save_state(output_dir)
-            if completed_steps >= args.max_train_steps:
-                break
-
-        model.eval()
-        losses = []
-        for step, batch in enumerate(eval_dataloader):
-            with torch.no_grad():
-                outputs = model(**batch)
-
-            loss = outputs.loss
-            losses.append(
-                accelerator.gather_for_metrics(
-                    loss.repeat(args.per_device_eval_batch_size)
-                )
-            )
-
-        losses = torch.cat(losses)
-        try:
-            eval_loss = torch.mean(losses)
-            perplexity = math.exp(eval_loss)
-        except OverflowError:
-            perplexity = float("inf")
-
-        logger.info(f"epoch {epoch}: perplexity: {perplexity} eval_loss: {eval_loss}")
-
-        if args.with_tracking:
-            accelerator.log(
-                {
-                    "perplexity": perplexity,
-                    "eval_loss": eval_loss,
-                    "train_loss": total_loss.item() / len(train_dataloader),
-                    "epoch": epoch,
-                    "step": completed_steps,
-                },
-                step=completed_steps,
-            )
-
-        if args.checkpointing_steps == "epoch":
-            output_dir = f"epoch_{epoch}"
-            if args.output_dir is not None:
-                output_dir = os.path.join(args.output_dir, output_dir)
-            accelerator.save_state(output_dir)
-
-    if args.with_tracking:
-        accelerator.end_training()
-
-    if args.output_dir is not None:
-        accelerator.wait_for_everyone()
-        unwrapped_model = accelerator.unwrap_model(model)
-        unwrapped_model.save_pretrained(
-            args.output_dir,
-            is_main_process=accelerator.is_main_process,
-            save_function=accelerator.save,
-        )
-        if accelerator.is_main_process:
-            tokenizer.save_pretrained(args.output_dir)
-
-            with open(os.path.join(args.output_dir, "all_results.json"), "w") as f:
-                json.dump({"perplexity": perplexity}, f)
+    params = {
+        "starting_epoch": starting_epoch,
+        "args": args,
+        "model": model,
+        "train_dataloader": train_dataloader,
+        "accelerator": accelerator,
+        "optimizer": optimizer,
+        "lr_scheduler": lr_scheduler,
+        "progress_bar": progress_bar,
+        "eval_dataloader": eval_dataloader,
+        "logger": logger,
+        "completed_steps": completed_steps,
+    }
+    # experiment_1(**params)
+    # experiment_2(**params)
+    experiment_3(**params)
 
 
 if __name__ == "__main__":
