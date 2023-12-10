@@ -5,6 +5,3 @@ RUN apt-get install git curl numactl wget -y
 
 
 WORKDIR /code
-
-COPY requirements.txt requirements.txt
-RUN pip install -r requirements.txt
