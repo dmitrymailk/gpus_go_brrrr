@@ -12,4 +12,4 @@ flash-attn==2.3.2
 bitsandbytes==0.41.1
 scipy==1.11.3
 sentencepiece==0.1.99
-wandb==0.15.12
+wandb==0.16.1

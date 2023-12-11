@@ -25,6 +25,6 @@ RUN groupadd --gid $USER_GID $USERNAME \
 
 # [Optional] Set the default user. Omit if you want to keep the default as root.
 USER $USERNAME
-RUN  echo -e "\nexport PATH=$PATH:/home/user-name-goes-here/.local/bin\n" >>  /home/user-name-goes-here/.bashrc
+RUN  echo -e "\nexport PATH=$PATH:/home/user-name-goes-here/.local/bin\n" >>  /home/user-name-goes-here/.bashrc && sudo chown -R $USERNAME /opt/conda
 
 WORKDIR /code
