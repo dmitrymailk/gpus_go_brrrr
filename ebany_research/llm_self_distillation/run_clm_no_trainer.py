@@ -59,10 +59,11 @@ from transformers.utils.versions import require_version
 from ebany_research.llm_self_distillation.changed_neox import (
     GPTNeoXForCausalLM,
     GPTNeoXForCausalLM2,
+    GPTNeoXForCausalLM3,
 )
 
 # from transformers import GPTNeoXForCausalLM
-from ebany_research.llm_self_distillation.train_loops import experiment_1
+from ebany_research.llm_self_distillation.train_loops import experiment_1, experiment_2
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 # check_min_version("4.35.0.dev0")
@@ -372,8 +373,10 @@ def main():
     model_classes = {
         "GPTNeoXForCausalLM": GPTNeoXForCausalLM,
         "GPTNeoXForCausalLM2": GPTNeoXForCausalLM2,
+        "GPTNeoXForCausalLM3": GPTNeoXForCausalLM3,
     }
     model = model_classes[args.model_version]._from_config(config)
+    model.to(torch.bfloat16)
 
     print("MODEL", model)
 
@@ -584,9 +587,17 @@ def main():
         "logger": logger,
         "completed_steps": completed_steps,
     }
-    experiment_1(**params)
+    # experiment_1(**params)
     # experiment_2(**params)
-    # experiment_3(**params)
+    experiment_func_dict = {
+        "GPTNeoXForCausalLM": experiment_1,
+        "GPTNeoXForCausalLM2": experiment_2,
+    }
+    experiment_func = experiment_func_dict.get(
+        args.model_version,
+        experiment_2,
+    )
+    experiment_func(**params)
 
 
 if __name__ == "__main__":
