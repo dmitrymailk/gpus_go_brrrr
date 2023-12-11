@@ -55,29 +55,31 @@ from transformers import (
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
-from llm_self_distillation.changed_neox import GPTNeoXForCausalLM
+# from llm_self_distillation.changed_neox import GPTNeoXForCausalLM, GPTNeoXForCausalLM2
+from ebany_research.llm_self_distillation.changed_neox import (
+    GPTNeoXForCausalLM,
+    GPTNeoXForCausalLM2,
+)
 
 # from transformers import GPTNeoXForCausalLM
-from llm_self_distillation.train_loops import experiment_1
+from ebany_research.llm_self_distillation.train_loops import experiment_1
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 # check_min_version("4.35.0.dev0")
 
 logger = get_logger(__name__)
 
-require_version(
-    "datasets>=1.8.0",
-    "To fix: pip install -r examples/pytorch/language-modeling/requirements.txt",
-)
 
 MODEL_CONFIG_CLASSES = list(MODEL_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
+from jsonargparse import ArgumentParser, ActionConfigFile
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
+    parser = ArgumentParser(
         description="Finetune a transformers model on a causal language modeling task"
     )
+    parser.add_argument("--cfg", action=ActionConfigFile)
     parser.add_argument(
         "--dataset_name",
         type=str,
@@ -171,7 +173,7 @@ def parse_args():
     )
     parser.add_argument(
         "--lr_scheduler_type",
-        type=SchedulerType,
+        type=str,
         default="linear",
         help="The scheduler type to use.",
         choices=[
@@ -201,6 +203,12 @@ def parse_args():
         default=None,
         help="Model type to use if training from scratch.",
         choices=MODEL_TYPES,
+    )
+    parser.add_argument(
+        "--model_version",
+        type=str,
+        default="GPTNeoXForCausalLM",
+        help="Версия модели по дефолту. Нужно чтобы быстро переключать версии.",
     )
     parser.add_argument(
         "--block_size",
@@ -361,9 +369,12 @@ def main():
     )
 
     logger.info("Training new model from scratch")
-    model = GPTNeoXForCausalLM._from_config(
-        config,
-    )
+    model_classes = {
+        "GPTNeoXForCausalLM": GPTNeoXForCausalLM,
+        "GPTNeoXForCausalLM2": GPTNeoXForCausalLM2,
+    }
+    model = model_classes[args.model_version]._from_config(config)
+
     print("MODEL", model)
 
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
@@ -527,9 +538,7 @@ def main():
     if args.with_tracking:
         experiment_config = vars(args)
         # TensorBoard cannot log Enums, need the raw value
-        experiment_config["lr_scheduler_type"] = experiment_config[
-            "lr_scheduler_type"
-        ].value
+        experiment_config["lr_scheduler_type"] = experiment_config["lr_scheduler_type"]
         accelerator.init_trackers("llm_self_distillation", experiment_config)
 
     # Train!
