@@ -114,18 +114,38 @@ def experiment_2(
                 outputs = model(
                     **batch,
                 )
-                lm_loss = outputs['loss']
+                lm_loss = outputs["loss"]
                 all_losses = outputs["all_losses"]
-                loss = all_losses[-2]
+                loss = all_losses[-1]
                 # We keep track of the loss at each epoch
                 if args.with_tracking:
                     total_loss += loss
-                    losses_dict = {
-                        f"train_loss_step_{i}": item
-                        for i, item in enumerate(all_losses)
-                    }
-                    for i, item in enumerate(all_losses):
-                        total_losses_dict[f"total_train_loss_step_{i}"] += item
+                    # losses_dict = {
+                    #     f"train_loss_step_{i}": item
+                    #     for i, item in range(
+                    #         len(model.gpt_neox.layers) - 1 - model.classifiers_amount,
+                    #         len(model.gpt_neox.layers) - 1,
+                    #     )
+                    # }
+                    losses_dict = {}
+                    loss_pos = 0
+                    for layer_pos in range(len(model.gpt_neox.layers) ):
+                        if (
+                            layer_pos
+                            < len(model.gpt_neox.layers) - 1 - model.classifiers_amount
+                        ):
+                            losses_dict[f"train_loss_step_{layer_pos}"] = 0.0
+                            total_losses_dict[
+                                f"total_train_loss_step_{layer_pos}"
+                            ] = 0.0
+                        else:
+                            losses_dict[f"train_loss_step_{layer_pos}"] = outputs[
+                                "all_losses"
+                            ][loss_pos]
+                            total_losses_dict[
+                                f"total_train_loss_step_{layer_pos}"
+                            ] += outputs["all_losses"][loss_pos]
+                            loss_pos += 1
 
                     accelerator.log(
                         {
@@ -153,8 +173,7 @@ def experiment_2(
             with torch.no_grad():
                 outputs = model(**batch)
 
-            # loss = outputs["all_losses"][-1]
-            loss = outputs["all_losses"][-2]
+            loss = outputs["all_losses"][-1]
             losses.append(
                 accelerator.gather_for_metrics(
                     loss.repeat(args.per_device_eval_batch_size)

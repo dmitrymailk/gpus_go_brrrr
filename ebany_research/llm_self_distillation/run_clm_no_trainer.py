@@ -60,6 +60,7 @@ from ebany_research.llm_self_distillation.changed_neox import (
     GPTNeoXForCausalLM,
     GPTNeoXForCausalLM2,
     GPTNeoXForCausalLM3,
+    GPTNeoXForCausalLM4,
 )
 
 # from transformers import GPTNeoXForCausalLM
@@ -374,6 +375,7 @@ def main():
         "GPTNeoXForCausalLM": GPTNeoXForCausalLM,
         "GPTNeoXForCausalLM2": GPTNeoXForCausalLM2,
         "GPTNeoXForCausalLM3": GPTNeoXForCausalLM3,
+        "GPTNeoXForCausalLM4": GPTNeoXForCausalLM4,
     }
     model = model_classes[args.model_version]._from_config(config)
     model.to(torch.bfloat16)

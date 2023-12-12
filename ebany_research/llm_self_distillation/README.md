@@ -278,5 +278,11 @@ wandb:       train_loss_step_23 7.125
 Вывод: Данный метод почти никак не повлиял, в районе погрешности. Данный метод сработал на более маленькой модели, но 
 на большой показал только деградацию. Необходимо применить метрики из статьи. `Be Your Own Teacher: Improve the Performance of Convolutional Neural Networks via Self Distillation`.
 
-### 8 Эксперимент (simple-classifiers-pythia-70m-8)
-Применение лосса с использованием 
+### 8 Эксперимент (be-your-own-teacher-pythia-410m-8)
+- копия лосса из этого репозитория https://github.com/luanyunteng/pytorch-be-your-own-teacher/blob/master/train.py#L193
+
+Применение лосса с использованием kd_loss + cross entropy.
+
+перебрал, видоизменил что только можно, так и не получилось адекватно завести лосс.
+нужно посмотреть как это делается для языковых моделей тут https://github.com/huggingface/transformers/tree/main/examples/research_projects/distillation
+
