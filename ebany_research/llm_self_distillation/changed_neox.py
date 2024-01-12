@@ -955,419 +955,15 @@ class GPTNeoXForCausalLM2(GPTNeoXPreTrainedModel):
         super().__init__(config)
 
         self.gpt_neox = GPTNeoXModel(config)
-        self.embed_out_old = nn.Linear(
-            config.hidden_size, config.vocab_size, bias=False
-        )
-        self.embed_out = nn.ModuleList(
-            nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-            for _ in range(config.num_hidden_layers)
-        )
-        # Initialize weights and apply final processing
-        self.post_init()
-
-    def get_output_embeddings(self):
-        return self.embed_out
-
-    def set_output_embeddings(self, new_embeddings):
-        self.embed_out = new_embeddings
-
-    @add_start_docstrings_to_model_forward(
-        GPT_NEOX_INPUTS_DOCSTRING.format("batch_size, sequence_length")
-    )
-    @replace_return_docstrings(
-        output_type=CausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC
-    )
-    def forward(
-        self,
-        input_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
-        past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
-        labels: Optional[torch.LongTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, CausalLMOutputWithPast]:
-        r"""
-        past_key_values (`tuple(tuple(torch.FloatTensor))`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
-            Tuple of `tuple(torch.FloatTensor)` of length `config.n_layers`, with each tuple having 2 tensors of shape
-            `(batch_size, num_heads, sequence_length, embed_size_per_head)`) and 2 additional tensors of shape
-            `(batch_size, num_heads, encoder_sequence_length, embed_size_per_head)`. The two additional tensors are
-            only required when the model is used as a decoder in a Sequence to Sequence model.
-
-            Contains pre-computed hidden-states (key and values in the self-attention blocks that can be used (see
-            `past_key_values` input) to speed up sequential decoding.
-
-            If `past_key_values` are used, the user can optionally input only the last `decoder_input_ids` (those that
-            don't have their past key value states given to this model) of shape `(batch_size, 1)` instead of all
-            `decoder_input_ids` of shape `(batch_size, sequence_length)`.
-        labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
-            Labels for computing the left-to-right language modeling loss (next word prediction). Indices should be in
-            `[-100, 0, ..., config.vocab_size]` (see `input_ids` docstring) Tokens with indices set to `-100` are
-            ignored (masked), the loss is only computed for the tokens with labels n `[0, ..., config.vocab_size]`.
-        use_cache (`bool`, *optional*):
-            If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding (see
-            `past_key_values`).
-
-        Returns:
-
-        Example:
-
-        ```python
-        >>> from transformers import AutoTokenizer, GPTNeoXForCausalLM, GPTNeoXConfig
-        >>> import torch
-
-        >>> tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
-        >>> config = GPTNeoXConfig.from_pretrained("EleutherAI/gpt-neox-20b")
-        >>> config.is_decoder = True
-        >>> model = GPTNeoXForCausalLM.from_pretrained("EleutherAI/gpt-neox-20b", config=config)
-
-        >>> inputs = tokenizer("Hello, my dog is cute", return_tensors="pt")
-        >>> outputs = model(**inputs)
-
-        >>> prediction_logits = outputs.logits
-        ```"""
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
-
-        outputs = self.gpt_neox(
-            input_ids,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
-            past_key_values=past_key_values,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=True,
-            return_dict=return_dict,
-        )
-
-        hidden_states = outputs[0]
-        # lm_logits_old = self.embed_out_old(hidden_states)
-        llm_logits = [
-            self.embed_out[i](outputs.hidden_states[i + 1])
-            for i in range(len(self.embed_out))
-        ]
-        lm_logits = llm_logits[-1]
-
-        lm_loss = None
-        if labels is not None:
-            lm_loss = torch.tensor(
-                0.0,
-                dtype=torch.float32,
-                device=self.device,
-            )
-            labels = labels.to(llm_logits[0].device)
-            labels = labels[:, 1:].contiguous()
-            loss_fct = CrossEntropyLoss()
-            all_losses = []
-
-            for llm_logit in llm_logits:
-                shift_llm_logit = llm_logit[:, :-1, :].contiguous()
-                classif_loss = loss_fct(
-                    shift_llm_logit.view(-1, shift_llm_logit.size(-1)), labels.view(-1)
-                )
-                all_losses.append(
-                    torch.tensor(
-                        classif_loss.detach().float(),
-                    )
-                )
-                lm_loss += classif_loss
-
-        if not return_dict:
-            output = (lm_logits,) + outputs[1:]
-            return ((lm_loss,) + output) if lm_loss is not None else output
-
-        return {
-            "loss": lm_loss,
-            "all_losses": all_losses,
-            "logits": lm_logits,
-            "past_key_values": outputs.past_key_values,
-            "hidden_states": outputs.hidden_states,
-            "attentions": outputs.attentions,
-        }
-
-    def prepare_inputs_for_generation(
-        self,
-        input_ids,
-        past_key_values=None,
-        attention_mask=None,
-        inputs_embeds=None,
-        **kwargs,
-    ):
-        input_shape = input_ids.shape
-        # cut decoder_input_ids if past is used
-        if past_key_values is not None:
-            past_length = past_key_values[0][0].shape[2]
-
-            # Some generation methods already pass only the last input ID
-            if input_ids.shape[1] > past_length:
-                remove_prefix_length = past_length
-            else:
-                # Default to old behavior: keep only final ID
-                remove_prefix_length = input_ids.shape[1] - 1
-
-            input_ids = input_ids[:, remove_prefix_length:]
-
-        position_ids = kwargs.get("position_ids", None)
-        if attention_mask is not None and position_ids is None:
-            # create position_ids on the fly for batch generation
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids.masked_fill_(attention_mask == 0, 1)
-            if past_key_values:
-                position_ids = position_ids[:, -input_ids.shape[1] :]
-
-        # if model is used as a decoder in encoder-decoder model, the decoder attention mask is created on the fly
-        if attention_mask is None:
-            attention_mask = input_ids.new_ones(input_shape)
-
-        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
-        if inputs_embeds is not None and past_key_values is None:
-            model_inputs = {"inputs_embeds": inputs_embeds}
-        else:
-            model_inputs = {"input_ids": input_ids}
-        model_inputs.update(
-            {
-                "attention_mask": attention_mask,
-                "past_key_values": past_key_values,
-                "position_ids": position_ids,
-            }
-        )
-
-        return model_inputs
-
-    def _reorder_cache(self, past_key_values, beam_idx):
-        reordered_past = ()
-        for layer_past in past_key_values:
-            reordered_past += (
-                tuple(
-                    past_state.index_select(0, beam_idx.to(past_state.device))
-                    for past_state in layer_past[:2]
-                )
-                + layer_past[2:],
-            )
-        return reordered_past
-
-
-class GPTNeoXForCausalLM3(GPTNeoXPreTrainedModel):
-    _tied_weights_keys = ["embed_out.weight"]
-
-    def __init__(self, config):
-        super().__init__(config)
-
-        self.gpt_neox = GPTNeoXModel(config)
-        self.embed_out = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-        # self.embed_out = nn.ModuleList(
-        #     nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-        #     for _ in range(config.num_hidden_layers)
-        # )
-        # Initialize weights and apply final processing
-        self.post_init()
-
-    def get_output_embeddings(self):
-        return self.embed_out
-
-    def set_output_embeddings(self, new_embeddings):
-        self.embed_out = new_embeddings
-
-    @add_start_docstrings_to_model_forward(
-        GPT_NEOX_INPUTS_DOCSTRING.format("batch_size, sequence_length")
-    )
-    @replace_return_docstrings(
-        output_type=CausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC
-    )
-    def forward(
-        self,
-        input_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
-        past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
-        labels: Optional[torch.LongTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, CausalLMOutputWithPast]:
-        r"""
-        past_key_values (`tuple(tuple(torch.FloatTensor))`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
-            Tuple of `tuple(torch.FloatTensor)` of length `config.n_layers`, with each tuple having 2 tensors of shape
-            `(batch_size, num_heads, sequence_length, embed_size_per_head)`) and 2 additional tensors of shape
-            `(batch_size, num_heads, encoder_sequence_length, embed_size_per_head)`. The two additional tensors are
-            only required when the model is used as a decoder in a Sequence to Sequence model.
-
-            Contains pre-computed hidden-states (key and values in the self-attention blocks that can be used (see
-            `past_key_values` input) to speed up sequential decoding.
-
-            If `past_key_values` are used, the user can optionally input only the last `decoder_input_ids` (those that
-            don't have their past key value states given to this model) of shape `(batch_size, 1)` instead of all
-            `decoder_input_ids` of shape `(batch_size, sequence_length)`.
-        labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
-            Labels for computing the left-to-right language modeling loss (next word prediction). Indices should be in
-            `[-100, 0, ..., config.vocab_size]` (see `input_ids` docstring) Tokens with indices set to `-100` are
-            ignored (masked), the loss is only computed for the tokens with labels n `[0, ..., config.vocab_size]`.
-        use_cache (`bool`, *optional*):
-            If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding (see
-            `past_key_values`).
-
-        Returns:
-
-        Example:
-
-        ```python
-        >>> from transformers import AutoTokenizer, GPTNeoXForCausalLM, GPTNeoXConfig
-        >>> import torch
-
-        >>> tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
-        >>> config = GPTNeoXConfig.from_pretrained("EleutherAI/gpt-neox-20b")
-        >>> config.is_decoder = True
-        >>> model = GPTNeoXForCausalLM.from_pretrained("EleutherAI/gpt-neox-20b", config=config)
-
-        >>> inputs = tokenizer("Hello, my dog is cute", return_tensors="pt")
-        >>> outputs = model(**inputs)
-
-        >>> prediction_logits = outputs.logits
-        ```"""
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
-
-        outputs = self.gpt_neox(
-            input_ids,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
-            past_key_values=past_key_values,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=True,
-            return_dict=return_dict,
-        )
-
-        llm_logits = [
-            self.embed_out(outputs.hidden_states[i + 1])
-            for i in range(len(outputs.hidden_states) - 1)
-        ]
-        lm_logits = llm_logits[-1]
-
-        lm_loss = None
-        if labels is not None:
-            lm_loss = torch.tensor(
-                0.0,
-                dtype=torch.float32,
-                device=self.device,
-            )
-            labels = labels.to(llm_logits[0].device)
-            labels = labels[:, 1:].contiguous()
-            loss_fct = CrossEntropyLoss()
-            all_losses = []
-
-            for llm_logit in llm_logits:
-                shift_llm_logit = llm_logit[:, :-1, :].contiguous()
-                classif_loss = loss_fct(
-                    shift_llm_logit.view(-1, shift_llm_logit.size(-1)), labels.view(-1)
-                )
-                all_losses.append(
-                    torch.tensor(
-                        classif_loss.detach().float(),
-                    )
-                )
-                lm_loss += classif_loss
-
-        if not return_dict:
-            output = (lm_logits,) + outputs[1:]
-            return ((lm_loss,) + output) if lm_loss is not None else output
-
-        return {
-            "loss": lm_loss,
-            "all_losses": all_losses,
-            "logits": lm_logits,
-            "past_key_values": outputs.past_key_values,
-            "hidden_states": outputs.hidden_states,
-            "attentions": outputs.attentions,
-        }
-
-    def prepare_inputs_for_generation(
-        self,
-        input_ids,
-        past_key_values=None,
-        attention_mask=None,
-        inputs_embeds=None,
-        **kwargs,
-    ):
-        input_shape = input_ids.shape
-        # cut decoder_input_ids if past is used
-        if past_key_values is not None:
-            past_length = past_key_values[0][0].shape[2]
-
-            # Some generation methods already pass only the last input ID
-            if input_ids.shape[1] > past_length:
-                remove_prefix_length = past_length
-            else:
-                # Default to old behavior: keep only final ID
-                remove_prefix_length = input_ids.shape[1] - 1
-
-            input_ids = input_ids[:, remove_prefix_length:]
-
-        position_ids = kwargs.get("position_ids", None)
-        if attention_mask is not None and position_ids is None:
-            # create position_ids on the fly for batch generation
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids.masked_fill_(attention_mask == 0, 1)
-            if past_key_values:
-                position_ids = position_ids[:, -input_ids.shape[1] :]
-
-        # if model is used as a decoder in encoder-decoder model, the decoder attention mask is created on the fly
-        if attention_mask is None:
-            attention_mask = input_ids.new_ones(input_shape)
-
-        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
-        if inputs_embeds is not None and past_key_values is None:
-            model_inputs = {"inputs_embeds": inputs_embeds}
-        else:
-            model_inputs = {"input_ids": input_ids}
-        model_inputs.update(
-            {
-                "attention_mask": attention_mask,
-                "past_key_values": past_key_values,
-                "position_ids": position_ids,
-            }
-        )
-
-        return model_inputs
-
-    def _reorder_cache(self, past_key_values, beam_idx):
-        reordered_past = ()
-        for layer_past in past_key_values:
-            reordered_past += (
-                tuple(
-                    past_state.index_select(0, beam_idx.to(past_state.device))
-                    for past_state in layer_past[:2]
-                )
-                + layer_past[2:],
-            )
-        return reordered_past
-
-
-class GPTNeoXForCausalLM4(GPTNeoXPreTrainedModel):
-    _tied_weights_keys = ["embed_out.weight"]
-
-    def __init__(self, config):
-        super().__init__(config)
-
-        self.gpt_neox = GPTNeoXModel(config)
         self.main_classif = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
-        self.classifiers_amount = 1
+        self.classifiers_amount = 2
         self.classifiers = nn.ModuleList(
-            nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+            nn.Linear(
+                config.hidden_size,
+                config.vocab_size,
+                bias=False,
+            )
             for _ in range(self.classifiers_amount)
         )
         # Initialize weights and apply final processing
@@ -1398,6 +994,7 @@ class GPTNeoXForCausalLM4(GPTNeoXPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        global_step: Optional[int] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""
         past_key_values (`tuple(tuple(torch.FloatTensor))`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
@@ -1455,8 +1052,8 @@ class GPTNeoXForCausalLM4(GPTNeoXPreTrainedModel):
             return_dict=return_dict,
         )
 
-        hidden_states = outputs[0]
-        lm_logits = self.main_classif(hidden_states)
+        last_hidden_states = outputs[0]
+        lm_logits = self.main_classif(last_hidden_states)
 
         lm_loss = None
         if labels is not None:
@@ -1466,6 +1063,13 @@ class GPTNeoXForCausalLM4(GPTNeoXPreTrainedModel):
                 dtype=torch.bfloat16,
             )
             teacher_logits = lm_logits.detach()
+
+            mask = attention_mask.unsqueeze(-1).expand_as(teacher_logits).bool()
+
+            # (bs * seq_length * voc_size) modulo the 1s in mask
+            t_logits_slct = torch.masked_select(teacher_logits, mask)
+            # (bs * seq_length, voc_size) modulo the 1s in mask
+            t_logits_slct = t_logits_slct.view(-1, teacher_logits.size(-1))
 
             labels = labels.to(lm_logits.device)
             labels = labels[:, 1:].contiguous()
@@ -1477,22 +1081,35 @@ class GPTNeoXForCausalLM4(GPTNeoXPreTrainedModel):
             )
             lm_loss += main_lm_loss
             all_lm_losses = []
-            temperature = 10
-            alpha_ce = 0.1
-            alpha_cos = 1.0
-            alpha_clm = 1.0
+            temperature = 1
+            alpha_ce = 0.5
+            alpha_hidden = 0.5
+            alpha_clm = 0.6
 
             for hidden_pos, classifier in zip(
+                # я не беру последний hidden_states, потому что
+                # за него отвечает self.main_classif
+                # range(
+                #     len(outputs.hidden_states) - 1 - self.classifiers_amount,
+                #     len(outputs.hidden_states) - 1,
+                # ),
                 range(
-                    len(outputs.hidden_states) - 1 - self.classifiers_amount,
+                    self.classifiers_amount,
                     len(outputs.hidden_states) - 1,
                 ),
                 self.classifiers,
             ):
                 student_logit = classifier(outputs.hidden_states[hidden_pos])
+
+                # (bs * seq_length * voc_size) modulo the 1s in mask
+                s_logits_slct = torch.masked_select(student_logit, mask)
+                # (bs * seq_length, voc_size) modulo the 1s in mask
+                s_logits_slct = s_logits_slct.view(-1, student_logit.size(-1))
+                assert t_logits_slct.size() == s_logits_slct.size()
+
                 loss_ce = F.kl_div(
-                    F.log_softmax(student_logit / temperature, dim=-1),
-                    F.softmax(lm_logits / temperature, dim=-1),
+                    F.log_softmax(s_logits_slct / temperature, dim=-1),
+                    F.softmax(t_logits_slct / temperature, dim=-1),
                     reduction="batchmean",
                 ) * (temperature**2)
                 student_logit_shifted = student_logit[..., :-1, :].contiguous()
@@ -1500,9 +1117,15 @@ class GPTNeoXForCausalLM4(GPTNeoXPreTrainedModel):
                     student_logit_shifted.view(-1, lm_logits.size(-1)),
                     labels.view(-1),
                 )
+                hidden_loss = F.mse_loss(
+                    outputs.hidden_states[hidden_pos],
+                    last_hidden_states.detach(),
+                )
                 all_lm_losses.append(loss_clm.detach().float())
+                # if global_step > 20:
                 lm_loss += loss_ce * alpha_ce
                 lm_loss += alpha_clm * loss_clm
+                lm_loss += alpha_hidden * hidden_loss
                 # student_logits.append(student_logit)
 
             all_lm_losses.append(main_lm_loss.detach().float())
@@ -1518,45 +1141,6 @@ class GPTNeoXForCausalLM4(GPTNeoXPreTrainedModel):
             "hidden_states": outputs.hidden_states,
             "attentions": outputs.attentions,
         }
-
-    def kd_loss_function(
-        self,
-        output,
-        target_output,
-        temperature=3,
-    ):
-        """Compute kd loss"""
-        """
-        para: output: middle ouptput logits.
-        para: target_output: final output has divided by temperature and softmax.
-        """
-
-        output = output / temperature
-        output_log_softmax = torch.log_softmax(output, dim=1)
-        # output_log_softmax = torch.log(output, dim=1)
-        # loss_kd = -torch.mean(torch.sum(output_log_softmax * target_output, dim=1))
-        loss_kd = F.kl_div(
-            output_log_softmax,
-            target_output,
-            reduction="batchmean",
-        )
-        return loss_kd
-
-    def feature_loss_function(
-        self,
-        fea,
-        target_fea,
-    ):
-        # loss = (fea - target_fea) ** 2 * ((fea > 0) | (target_fea > 0)).float()
-        # loss = (fea - target_fea) ** 2 * torch.logical_or(
-        #     (fea > 0),
-        #     (target_fea > 0),
-        # ).float()
-        # return torch.abs(loss).sum()
-        # loss = torch.norm(fea - target_fea, p=2) ** 2
-        # loss = torch.norm(fea - target_fea, p=2)
-        loss = F.mse_loss(fea, target_fea)
-        return loss
 
     def prepare_inputs_for_generation(
         self,
@@ -1618,13 +1202,3 @@ class GPTNeoXForCausalLM4(GPTNeoXPreTrainedModel):
                 + layer_past[2:],
             )
         return reordered_past
-
-
-if __name__ == "__main__":
-    # model = GPTNeoXForCausalLM.from_pretrained("EleutherAI/pythia-70m")
-    # model.cuda()
-
-    sample_text = "Hello world"
-
-    # sample_text = tokenizer(sample_text, return_tensors="pt").to("cuda")
-    # result = model(**sample_text, layer_iterations=1)

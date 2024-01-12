@@ -112,6 +112,7 @@ def experiment_2(
             with accelerator.accumulate(model):
                 # outputs = model(**batch, layer_iterations=layer_iterations)
                 outputs = model(
+                    global_step=completed_steps,
                     **batch,
                 )
                 lm_loss = outputs["loss"]
@@ -129,11 +130,24 @@ def experiment_2(
                     # }
                     losses_dict = {}
                     loss_pos = 0
-                    for layer_pos in range(len(model.gpt_neox.layers) ):
-                        if (
-                            layer_pos
-                            < len(model.gpt_neox.layers) - 1 - model.classifiers_amount
-                        ):
+                    for layer_pos in range(len(model.gpt_neox.layers)):
+                        # if (
+                        #     layer_pos
+                        #     < len(model.gpt_neox.layers) - 1 - model.classifiers_amount
+                        # ):
+                        #     losses_dict[f"train_loss_step_{layer_pos}"] = 0.0
+                        #     total_losses_dict[
+                        #         f"total_train_loss_step_{layer_pos}"
+                        #     ] = 0.0
+                        # else:
+                        #     losses_dict[f"train_loss_step_{layer_pos}"] = outputs[
+                        #         "all_losses"
+                        #     ][loss_pos]
+                        #     total_losses_dict[
+                        #         f"total_train_loss_step_{layer_pos}"
+                        #     ] += outputs["all_losses"][loss_pos]
+                        #     loss_pos += 1
+                        if layer_pos > model.classifiers_amount - 1:
                             losses_dict[f"train_loss_step_{layer_pos}"] = 0.0
                             total_losses_dict[
                                 f"total_train_loss_step_{layer_pos}"
@@ -171,7 +185,10 @@ def experiment_2(
         losses = []
         for step, batch in enumerate(eval_dataloader):
             with torch.no_grad():
-                outputs = model(**batch)
+                outputs = model(
+                    global_step=completed_steps,
+                    **batch,
+                )
 
             loss = outputs["all_losses"][-1]
             losses.append(
