@@ -55,11 +55,7 @@ from transformers import (
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
-# from llm_self_distillation.changed_neox import GPTNeoXForCausalLM, GPTNeoXForCausalLM2
-from ebany_research.llm_self_distillation.changed_neox import (
-    GPTNeoXForCausalLM,
-    GPTNeoXForCausalLM2,
-)
+from ebany_research.llm_lora.changed_neox import GPTNeoXForCausalLM
 
 # from transformers import GPTNeoXForCausalLM
 from ebany_research.llm_self_distillation.train_loops import experiment_1, experiment_2
@@ -375,19 +371,14 @@ def main():
     logger.info("Training new model from scratch")
     model_classes = {
         "GPTNeoXForCausalLM": GPTNeoXForCausalLM,
-        "GPTNeoXForCausalLM2": GPTNeoXForCausalLM2,
     }
     model = model_classes[args.model_version]._from_config(config)
     model.to(torch.bfloat16)
 
     print("MODEL", model)
     print("COUNT PARAMETERS", count_parameters(model))
-    # COUNT PARAMETERS 405_334_016
-    # COUNT PARAMETERS 304_572_416
-    # COUNT PARAMETERS 304_572_488
-    # ---
-    # COUNT PARAMETERS 354_959_360 - 30
-    # COUNT PARAMETERS 438_937_600 - 40
+    # original model - COUNT PARAMETERS 405_334_016
+    # lora 8 -  
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
     # on a small vocab and want a smaller embedding size, remove this test.
     embedding_size = model.get_input_embeddings().weight.shape[0]
@@ -550,7 +541,7 @@ def main():
         experiment_config = vars(args)
         # TensorBoard cannot log Enums, need the raw value
         experiment_config["lr_scheduler_type"] = experiment_config["lr_scheduler_type"]
-        accelerator.init_trackers("llm_self_distillation", experiment_config)
+        accelerator.init_trackers("llm_lora", experiment_config)
 
     # Train!
     total_batch_size = (
