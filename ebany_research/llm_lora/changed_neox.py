@@ -58,6 +58,9 @@ if is_flash_attn_2_available():
     from flash_attn import flash_attn_func, flash_attn_varlen_func
     from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
 
+from typing import Optional
+from torch import Tensor
+from torch.nn.parameter import Parameter
 
 logger = logging.get_logger(__name__)
 
@@ -75,6 +78,61 @@ def _get_unpad_data(attention_mask):
         cu_seqlens,
         max_seqlen_in_batch,
     )
+
+
+class CustomEmbedding(torch.nn.Embedding):
+    def __init__(
+        self,
+        num_embeddings: int,
+        embedding_dim: int,
+        padding_idx: int | None = None,
+        max_norm: float | None = None,
+        norm_type: float = 2,
+        scale_grad_by_freq: bool = False,
+        sparse: bool = False,
+        _weight: Tensor | None = None,
+        _freeze: bool = False,
+        device=None,
+        dtype=None,
+    ) -> None:
+        super().__init__(
+            num_embeddings,
+            embedding_dim,
+            padding_idx,
+            max_norm,
+            norm_type,
+            scale_grad_by_freq,
+            sparse,
+            _weight,
+            _freeze,
+            device,
+            dtype,
+        )
+        self.weight = None
+        factory_kwargs = {"device": device, "dtype": dtype}
+        r = 256 * 2
+        self.A = Parameter(
+            torch.empty((num_embeddings, r), **factory_kwargs),
+            requires_grad=not _freeze,
+        )
+        self.B = Parameter(
+            torch.empty((r, embedding_dim), **factory_kwargs),
+            requires_grad=not _freeze,
+        )
+        self.B.data.normal_(mean=0.0, std=0.02)
+        self.A.data.normal_(mean=0.0, std=0.02)
+
+    def forward(self, input: Tensor) -> Tensor:
+        weight = self.A @ self.B
+        return F.embedding(
+            input,
+            weight,
+            self.padding_idx,
+            self.max_norm,
+            self.norm_type,
+            self.scale_grad_by_freq,
+            self.sparse,
+        )
 
 
 class GPTNeoXPreTrainedModel(PreTrainedModel):
@@ -131,7 +189,7 @@ class NonLinearLora(nn.Module):
         return hidden_states
 
 
-class GPTNeoXAttention(nn.Module):
+class GPTNeoXAttention_(nn.Module):
     def __init__(self, config=None, pos=None):
         super().__init__()
         self.config = config
@@ -360,7 +418,7 @@ class GPTNeoXAttention(nn.Module):
         return attn_output, attn_weights
 
 
-class GPTNeoXAttention_(nn.Module):
+class GPTNeoXAttention(nn.Module):
     def __init__(self, config=None, pos=None):
         super().__init__()
         self.config = config
@@ -1006,6 +1064,30 @@ class GPTNeoXMLP(nn.Module):
         return hidden_states
 
 
+class GPTNeoXMLPLora(nn.Module):
+    def __init__(self, config=None, r=8):
+        super().__init__()
+        self.dense_h_to_4h = LinearLora(
+            in_dim=config.hidden_size,
+            out_dim=config.intermediate_size,
+            r=r,
+            bias=True,
+        )
+        self.dense_4h_to_h = LinearLora(
+            in_dim=config.intermediate_size,
+            out_dim=config.hidden_size,
+            r=r,
+            bias=True,
+        )
+        self.act = ACT2FN[config.hidden_act]
+
+    def forward(self, hidden_states):
+        hidden_states = self.dense_h_to_4h(hidden_states)
+        hidden_states = self.act(hidden_states)
+        hidden_states = self.dense_4h_to_h(hidden_states)
+        return hidden_states
+
+
 GPT_NEOX_ATTENTION_CLASSES = {
     "eager": GPTNeoXAttention,
     "flash_attention_2": GPTNeoXFlashAttention2,
@@ -1024,16 +1106,18 @@ class GPTNeoXLayer(nn.Module):
         )
         self.post_attention_dropout = nn.Dropout(config.hidden_dropout)
         self.post_mlp_dropout = nn.Dropout(config.hidden_dropout)
+
         self.attention = GPT_NEOX_ATTENTION_CLASSES[config._attn_implementation](
             config=config,
             pos=pos,
         )
-        # if pos in list(range(1, 24, 2)):
-        #     self.mlp = NonLinearLora(
-        #         in_dim=config.hidden_size,
-        #         out_dim=config.hidden_size,
-        #         r=config.hidden_size,
+        # center = config.num_hidden_layers // 2 + 1
+        # if pos >= center and pos <= center + 6:
+        #     self.mlp = GPTNeoXMLPLora(
+        #         config=config,
+        #         r=16,
         #     )
+        #     self.post_mlp_dropout = nn.Dropout(config.hidden_dropout)
         # else:
         #     self.mlp = GPTNeoXMLP(config)
 
@@ -1152,6 +1236,7 @@ class GPTNeoXModel(GPTNeoXPreTrainedModel):
         self.config = config
 
         self.embed_in = nn.Embedding(config.vocab_size, config.hidden_size)
+        # self.embed_in = CustomEmbedding(config.vocab_size, config.hidden_size)
         self.emb_dropout = nn.Dropout(config.hidden_dropout)
         self.layers = nn.ModuleList(
             [
@@ -1358,6 +1443,11 @@ class GPTNeoXForCausalLM(GPTNeoXPreTrainedModel):
 
         self.gpt_neox = GPTNeoXModel(config)
         self.embed_out = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        # self.embed_out = LinearLora(
+        #     in_dim=config.hidden_size,
+        #     out_dim=config.vocab_size,
+        #     r=512,
+        # )
 
         # Initialize weights and apply final processing
         self.post_init()

@@ -70,13 +70,13 @@
 
 ### 16 Эксперимент (3-layers-partial-linear-lora-6-nonlinear-lora-8-attention-16)
 До 3 слоя идет полный attention, на следующих lora 8.
-До 6 слоя идет обычный MLP, потом nonlinear lora 8.
+До 6 слоя идет обычный MLP, потом nonlinear lora 8. [НЕПРАВИЛЬНО]
 
 - PARAMETERS 163_998_008
 
 ### 17 Эксперимент (3-layers-partial-linear-lora-12-nonlinear-lora-8-attention-17)
 До 3 слоя идет полный attention, на следующих lora 8.
-До 12 слоя идет обычный MLP, потом nonlinear lora 8.
+До 12 слоя идет обычный MLP, потом nonlinear lora 8. [НЕПРАВИЛЬНО]
 
 - PARAMETERS 214_255_880
 
@@ -102,3 +102,93 @@
 Модель EleutherAI/pythia-2.8b.
 
 - PARAMETERS 2_056_361_168
+
+### 22 Эксперимент (6-layers-partial-linear-lora-8-20-layers-LoraMLP-8-22)
+До 6 слоя идет полный attention, на следующих lora 8.
+До 20 слоя идет полный MLP, на следующих lora 16.
+Модель EleutherAI/pythia-410m.
+-  PARAMETERS 291_211_536
+
+### 23 Эксперимент (6-layers-partial-linear-lora-8-12-18-layers-LoraMLP-8-23)
+До 6 слоя идет полный attention, на следующих lora 8.
+До pos >= 12 and pos <= 18 идут lora 16 MLP. 7 слоев
+Модель EleutherAI/pythia-410m.
+- PARAMETERS 266_537_328
+
+По итогу совпало с оригиналом.
+
+### 24 Эксперимент (6-layers-partial-linear-lora-8-12-18-layers-LoraMLP-8-24)
+До 6 слоя идет полный attention, на следующих lora 8.
+До pos >= num_hidden_layers // 2 and pos <= num_hidden_layers // 2 + 6 идут lora 16 MLP. 7 слоев.
+
+Модель EleutherAI/pythia-2.8b.
+- PARAMETERS 1_692_226_992
+
+Лосс совпал с исходной моделью.
+
+### 25 Эксперимент (freeze-embeddings-25)
+Модель EleutherAI/pythia-410m.
+Замораживаю все эмбеддинги. Все остальное в модели остается неизменным.
+- PARAMETERS 353822720
+Лосс намного выше
+
+### 26 Эксперимент (lora-embeddings-26)
+Модель EleutherAI/pythia-410m.
+Делаю собственные эмбеддинги с lora.
+```python
+class CustomEmbedding(torch.nn.Embedding):
+    def __init__(
+        self,
+        num_embeddings: int,
+        embedding_dim: int,
+        padding_idx: int | None = None,
+        max_norm: float | None = None,
+        norm_type: float = 2,
+        scale_grad_by_freq: bool = False,
+        sparse: bool = False,
+        _weight: Tensor | None = None,
+        _freeze: bool = False,
+        device=None,
+        dtype=None,
+    ) -> None:
+        super().__init__(
+            num_embeddings,
+            embedding_dim,
+            padding_idx,
+            max_norm,
+            norm_type,
+            scale_grad_by_freq,
+            sparse,
+            _weight,
+            _freeze,
+            device,
+            dtype,
+        )
+        self.weight = None
+        factory_kwargs = {"device": device, "dtype": dtype}
+        r = 256 * 2
+        self.A = Parameter(
+            torch.empty((num_embeddings, r), **factory_kwargs),
+            requires_grad=not _freeze,
+        )
+        self.B = Parameter(
+            torch.empty((r, embedding_dim), **factory_kwargs),
+            requires_grad=not _freeze,
+        )
+        self.B.data.normal_(mean=0.0, std=0.02)
+        self.A.data.normal_(mean=0.0, std=0.02)
+
+    def forward(self, input: Tensor) -> Tensor:
+        weight = self.A @ self.B
+        return F.embedding(
+            input,
+            weight,
+            self.padding_idx,
+            self.max_norm,
+            self.norm_type,
+            self.scale_grad_by_freq,
+            self.sparse,
+        )
+```
+- PARAMETERS 405334016
+Лосс выше, а параметров меньше всего на 10 миллионов. Эмбеддинги лучше не трогать.
