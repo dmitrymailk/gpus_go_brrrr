@@ -164,14 +164,14 @@ class GPTNeoXPreTrainedModel(PreTrainedModel):
 
 
 class LinearLora(nn.Module):
-    def __init__(self, in_dim=768, out_dim=768, r=8, bias=False):
+    def __init__(self, in_dim=768, out_dim=768, r=16, bias=False):
         super().__init__()
-        self.dense_h_to_4h = nn.Linear(in_dim, r, bias=bias)
-        self.dense_4h_to_h = nn.Linear(r, out_dim, bias=bias)
+        self.L = nn.Linear(in_dim, r, bias=bias)
+        self.R = nn.Linear(r, out_dim, bias=bias)
 
     def forward(self, hidden_states):
-        hidden_states = self.dense_h_to_4h(hidden_states)
-        hidden_states = self.dense_4h_to_h(hidden_states)
+        hidden_states = self.L(hidden_states)
+        hidden_states = self.R(hidden_states)
         return hidden_states
 
 

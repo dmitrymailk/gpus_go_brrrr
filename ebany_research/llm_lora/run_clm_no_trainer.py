@@ -587,8 +587,7 @@ def main():
         "logger": logger,
         "completed_steps": completed_steps,
     }
-    # experiment_1(**params)
-    # experiment_2(**params)
+    
     experiment_func_dict = {
         "GPTNeoXForCausalLM": experiment_1,
         "GPTNeoXForCausalLM2": experiment_2,
