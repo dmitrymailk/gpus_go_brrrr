@@ -183,17 +183,47 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
     return q_embed, k_embed
 
 
+class LinearLora(torch.nn.Module):
+    def __init__(self, in_dim=768, out_dim=768, r=16, bias=False):
+        super().__init__()
+        self.R = torch.nn.Linear(in_dim, r, bias=bias)
+        self.L = torch.nn.Linear(r, out_dim, bias=bias)
+
+    def forward(self, hidden_states):
+        hidden_states = self.R(hidden_states)
+        hidden_states = self.L(hidden_states)
+        return hidden_states
+
+
 class MistralMLP(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, layer_idx):
         super().__init__()
         self.config = config
         self.hidden_size = config.hidden_size
         self.intermediate_size = config.intermediate_size
         self.act_fn = ACT2FN[config.hidden_act]
-        
-        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
-        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
-        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
+        self.layer_idx = layer_idx
+
+        if self.layer_idx in config.lora_layers:
+            self.gate_proj = LinearLora(
+                self.hidden_size, self.intermediate_size, bias=False
+            )
+            self.up_proj = LinearLora(
+                self.hidden_size, self.intermediate_size, bias=False
+            )
+            self.down_proj = LinearLora(
+                self.intermediate_size, self.hidden_size, bias=False
+            )
+        else:
+            self.gate_proj = nn.Linear(
+                self.hidden_size, self.intermediate_size, bias=False
+            )
+            self.up_proj = nn.Linear(
+                self.hidden_size, self.intermediate_size, bias=False
+            )
+            self.down_proj = nn.Linear(
+                self.intermediate_size, self.hidden_size, bias=False
+            )
 
         self.metadata = {}
 
@@ -204,7 +234,7 @@ class MistralMLP(nn.Module):
         up_proj = self.up_proj(x)
         act_fn_up_proj = act_fn * up_proj
         down_proj = self.down_proj(act_fn_up_proj)
-        
+
         # self.metadata = {
         #     "x": x,
         #     "gate_proj(x)": gate_proj,
@@ -216,10 +246,10 @@ class MistralMLP(nn.Module):
         #     # "down_proj(act_fn_up_proj)": down_proj,
         #     # "down_proj.weight": self.down_proj.weight.data,
         # }
-        
+
         # for key in self.metadata.keys():
         #     if 'weight'
-        
+
         return down_proj
 
 
@@ -839,7 +869,7 @@ class MistralDecoderLayer(nn.Module):
             config, layer_idx
         )
 
-        self.mlp = MistralMLP(config)
+        self.mlp = MistralMLP(config, layer_idx)
         self.input_layernorm = MistralRMSNorm(
             config.hidden_size, eps=config.rms_norm_eps
         )
@@ -1212,7 +1242,7 @@ class MistralModel(MistralPreTrainedModel):
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
-            
+
             if max_layer == layer_pos:
                 break
 
@@ -1244,7 +1274,7 @@ class MistralModel(MistralPreTrainedModel):
         )
 
 
-class MistralForCausalLM(MistralPreTrainedModel):
+class ChangedMistralForCausalLM(MistralPreTrainedModel):
     _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config):
@@ -1343,7 +1373,7 @@ class MistralForCausalLM(MistralPreTrainedModel):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
-            max_layer=max_layer
+            max_layer=max_layer,
         )
 
         hidden_states = outputs[0]

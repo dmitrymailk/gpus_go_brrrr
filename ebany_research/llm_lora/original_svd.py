@@ -1,5 +1,4 @@
 from transformers import AutoTokenizer, AutoConfig
-from ebany_research.llm_lora.changed_mistral import MistralForCausalLM
 from datasets import load_dataset
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -11,6 +10,11 @@ import numpy as np
 import random
 import tqdm
 from transformers import Trainer, TrainingArguments
+from transformers import MistralForCausalLM
+from ebany_research.llm_lora.changed_mistral import (
+    LinearLora,
+    ChangedMistralForCausalLM,
+)
 
 
 def random_seed(seed=42, rank=0):
@@ -47,7 +51,8 @@ class OpenOrcaDataset(Dataset):
             inputs,
             return_tensors="pt",
             truncation=True,
-            max_length=4096,
+            # max_length=4096,
+            max_length=2048,
         )
         for key in inputs.keys():
             inputs[key] = inputs[key].squeeze(0)
@@ -77,29 +82,20 @@ def get_L_R(weights=None, rank=64):
     return L, R
 
 
-class LinearLora(torch.nn.Module):
-    def __init__(self, in_dim=768, out_dim=768, r=16, bias=False):
-        super().__init__()
-        self.L = torch.nn.Linear(in_dim, r, bias=bias)
-        self.R = torch.nn.Linear(r, out_dim, bias=bias)
-
-    def forward(self, hidden_states):
-        hidden_states = self.R(hidden_states)
-        hidden_states = self.L(hidden_states)
-        return hidden_states
-
-
 def assign_new_weights(original_module, original_weights):
     L, R = get_L_R(original_weights, rank=16)
     original_module.L.weight.data = L
     original_module.R.weight.data = R
 
 
-def freeze_params(model):
+def freeze_params(model, layers=None):
     for param in model.named_parameters():
         if "L" in param[0] or "R" in param[0]:
-            print(param[0])
-            param[1].requires_grad_(True)
+            param[1].requires_grad_(False)
+            for layer_id in layers:
+                if str(layer_id) in param[0]:
+                    print(param[0])
+                    param[1].requires_grad_(True)
         else:
             param[1].requires_grad_(False)
 
@@ -126,34 +122,30 @@ def eval_model(model):
 if __name__ == "__main__":
     random_seed()
     model_name = "Open-Orca/Mistral-7B-OpenOrca"
-    config = AutoConfig.from_pretrained(model_name)
+    lora_model_name = "ebany_research/llm_lora/models/"
+    lora_model_name += "openorca_lora_[17][11_17_22_26][11c_17_22_26c][11_17c_22_26]"
+    config = AutoConfig.from_pretrained(lora_model_name)
     device = 0
-    model = MistralForCausalLM.from_pretrained(
+    teacher_model = MistralForCausalLM.from_pretrained(
         model_name,
         device_map={"": device},
         torch_dtype=torch.bfloat16,
         attn_implementation="flash_attention_2",
     )
-    model = model.eval()
-    print(count_parameters(model))
+    teacher_model = teacher_model.eval()
+    print(count_parameters(teacher_model))
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.pad_token_id = tokenizer.eos_token_id
-    dataset = load_dataset("openaccess-ai-collective/oo-gpt4-filtered")
-    dataset = dataset["train"].to_list()
+    dataset = load_dataset("dim/openaccess-ai-collective-oo-gpt4-filtered")
 
-    train_elements = 100000
-    valid_elements = 100000
+    train_elements = 1000
+    valid_elements = 1000
     batch_size = 2
 
-    train_dataset = OpenOrcaDataset(
-        dataset=dataset[:train_elements],
-        tokenizer=tokenizer,
-    )
-
     valid_dataset = OpenOrcaDataset(
-        dataset=dataset[train_elements : train_elements + valid_elements],
+        dataset=dataset["test"].to_list()[:valid_elements],
         tokenizer=tokenizer,
     )
 
@@ -162,89 +154,96 @@ if __name__ == "__main__":
         mlm=False,
     )
 
-    train_dataloader = DataLoader(
-        dataset=train_dataset,
-        batch_size=batch_size,
-        collate_fn=pad_datacollator,
-    )
     valid_dataloader = DataLoader(
         dataset=valid_dataset,
         batch_size=batch_size,
         collate_fn=pad_datacollator,
+        shuffle=False,
     )
 
     # test
-    next(iter(train_dataloader))
     next(iter(valid_dataloader))
+    # 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 [17] 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32
+    # [11_17c_22_26]
+    distill_layers = [
+        6,
+        14,
+    ]
+    config.lora_layers = config.lora_layers + distill_layers
 
     device = 1
-    student_model = MistralForCausalLM.from_pretrained(
-        model_name,
+    student_model = ChangedMistralForCausalLM.from_pretrained(
+        lora_model_name,
         device_map={"": device},
         attn_implementation="flash_attention_2",
         torch_dtype=torch.bfloat16,
+        config=config,
     )
     student_model = student_model.eval()
+    print(student_model)
+    for distill_layer in distill_layers:
+        mlp = teacher_model.model.layers[distill_layer].mlp
 
-    distill_layer = 17
-    student_mlp = student_model.model.layers[distill_layer].mlp
+        student_gate_proj = mlp.gate_proj.weight.data.clone()
+        student_up_proj = mlp.up_proj.weight.data.clone()
+        student_down_proj = mlp.down_proj.weight.data.clone()
 
-    student_gate_proj = student_mlp.gate_proj.weight.data
-    student_up_proj = student_mlp.up_proj.weight.data
-    student_down_proj = student_mlp.down_proj.weight.data
+        # test
+        # L, R = get_L_R(student_down_proj)
+        # print(L.shape, R.shape)
 
-    # test
-    L, R = get_L_R(student_down_proj)
-    print(L.shape, R.shape)
+        # replace weights
+        lora_gate_proj = LinearLora(
+            in_dim=config.hidden_size,
+            out_dim=config.intermediate_size,
+            bias=False,
+        )
+        lora_up_proj = LinearLora(
+            in_dim=config.hidden_size,
+            out_dim=config.intermediate_size,
+            bias=False,
+        )
+        lora_down_proj = LinearLora(
+            in_dim=config.intermediate_size,
+            out_dim=config.hidden_size,
+            bias=False,
+        )
 
-    # replace weights
-    lora_gate_proj = LinearLora(
-        in_dim=config.hidden_size,
-        out_dim=config.intermediate_size,
-        bias=False,
-    )
-    lora_up_proj = LinearLora(
-        in_dim=config.hidden_size,
-        out_dim=config.intermediate_size,
-        bias=False,
-    )
-    lora_down_proj = LinearLora(
-        in_dim=config.intermediate_size,
-        out_dim=config.hidden_size,
-        bias=False,
-    )
+        assign_new_weights(
+            original_module=lora_gate_proj,
+            original_weights=student_gate_proj,
+        )
+        assign_new_weights(
+            original_module=lora_up_proj,
+            original_weights=student_up_proj,
+        )
+        assign_new_weights(
+            original_module=lora_down_proj,
+            original_weights=student_down_proj,
+        )
 
-    assign_new_weights(
-        original_module=lora_gate_proj,
-        original_weights=student_gate_proj,
-    )
-    assign_new_weights(
-        original_module=lora_up_proj,
-        original_weights=student_up_proj,
-    )
-    assign_new_weights(
-        original_module=lora_down_proj,
-        original_weights=student_down_proj,
-    )
-
-    student_mlp.gate_proj = lora_gate_proj
-    student_mlp.up_proj = lora_up_proj
-    student_mlp.down_proj = lora_down_proj
+        student_model.model.layers[distill_layer].mlp.gate_proj = lora_gate_proj
+        student_model.model.layers[distill_layer].mlp.up_proj = lora_up_proj
+        student_model.model.layers[distill_layer].mlp.down_proj = lora_down_proj
+        student_model.to(f"cuda:{device}")
 
     # show trainable parameters
-    print(count_parameters(model))
+    print(count_parameters(teacher_model))
     print(count_parameters(student_model))
 
-    teacher_loss = eval_model(model)
-    print("teacher_loss", teacher_loss, torch.exp(torch.tensor(teacher_loss)))
-    student_loss = eval_model(student_model)
-    print("student_loss", student_loss, torch.exp(torch.tensor(student_loss)))
-    # 1000
-    # teacher_loss 2.297937617301941 tensor(9.9536) batch = 2
-    # student_loss 2.2953803930282595 tensor(9.9282) batch = 2
-    # 10000
-    # teacher_loss 2.3349632108330725 tensor(10.3291) batch = 2
-    # student_loss 2.3332279333114623 tensor(10.3112) batch = 2
-    # 100000
-    # teacher_loss 2.3350424207425116 tensor(10.3299) batch = 2
-    # student_loss 2.3333492525792123 tensor(10.3124) batch = 2
+    # teacher_loss = eval_model(teacher_model)
+    # print("teacher_loss", teacher_loss, torch.exp(torch.tensor(teacher_loss)))
+    # student_loss = eval_model(student_model)
+    # print("student_loss", student_loss, torch.exp(torch.tensor(student_loss)))
+
+    name = lora_model_name.split("[")[-1][:-1]
+    name = name.split("_")
+    name = [int(item.replace("c", "")) for item in name]
+    name.extend(distill_layers)
+    name = sorted(name)
+    config.lora_layers = name
+    name = [str(item) for item in name]
+    name = "_".join(name)
+    lora_model_name += f"[{name}]"
+    print(lora_model_name)
+    student_model.save_pretrained(lora_model_name)

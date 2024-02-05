@@ -26,7 +26,7 @@ if __name__ == "__main__":
     random_seed()
     model_name = "Open-Orca/Mistral-7B-OpenOrca"
     lora_model_name = "ebany_research/llm_lora/models/"
-    lora_model_name += "openorca_lora_[17][11_17_22_26][11c_17_22_26c]"
+    lora_model_name += "openorca_lora_[17][11_17_22_26][11c_17_22_26c][11_17c_22_26]"
 
     config = AutoConfig.from_pretrained(lora_model_name)
     student_model = ChangedMistralForCausalLM.from_pretrained(
@@ -35,6 +35,7 @@ if __name__ == "__main__":
         attn_implementation="flash_attention_2",
         torch_dtype=torch.bfloat16,
     )
+    student_model = student_model.eval()
     tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -43,7 +44,7 @@ if __name__ == "__main__":
     # dataset = dataset["train"].to_list()
 
     train_elements = 10000
-    valid_elements = 1000
+    valid_elements = 10000
     batch_size = 2
 
     train_dataset = OpenOrcaDataset(
@@ -61,28 +62,11 @@ if __name__ == "__main__":
         mlm=False,
     )
 
-    callibration_layers = [17]
-
-    freeze_params(
-        student_model,
-        layers=callibration_layers,
-    )
     print(count_parameters(student_model))
 
-    save_path = lora_model_name
-    save_path += "["
-    layers_names = []
-    for layer_id in sorted(config.lora_layers):
-        if layer_id in callibration_layers:
-            layers_names.append(f"{layer_id}c")
-        else:
-            layers_names.append(f"{layer_id}")
-    layers_names = "_".join(layers_names)
-    print(layers_names)
-    save_path += layers_names
-    save_path += "]"
+    save_path = "ebany_research/llm_lora/models/openorca_lora_eval"
 
-    max_steps = 2
+    max_steps = 20
     training_args = TrainingArguments(
         output_dir=save_path,
         evaluation_strategy="steps",
@@ -107,6 +91,4 @@ if __name__ == "__main__":
         data_collator=pad_datacollator,
     )
 
-    # print(trainer.evaluate())
-    result = trainer.train()
-    trainer.save_model()
+    print(trainer.evaluate())

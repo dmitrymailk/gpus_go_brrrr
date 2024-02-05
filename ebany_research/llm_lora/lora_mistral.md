@@ -753,4 +753,9 @@ student_loss 2.3333492525792123 tensor(10.3124) batch = 2
 ```
 
 После сокращения размерности модель даже улучшила качество.
-- [commit]()
+- [commit](https://github.com/dmitrymailk/gpus_go_brrrr/blob/44667834f2107167f048fedfc27d0bec1534d298/ebany_research/llm_lora/original_svd.py#L248)
+
+### Experiment 4
+
+Сделал свой сплит данного датасета, чтобы можно было честно сравнивать модели после каллибровки. Соответственно все прошлые метрики не считаются.
+
