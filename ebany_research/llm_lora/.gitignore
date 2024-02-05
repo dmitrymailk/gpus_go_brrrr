@@ -1,3 +1,4 @@
 models/
 wandb
 openorca_train_tensors_layer_*
+train_results
