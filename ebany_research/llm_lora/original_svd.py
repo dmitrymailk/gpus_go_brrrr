@@ -93,7 +93,7 @@ def freeze_params(model, layers=None):
         if "L" in param[0] or "R" in param[0]:
             param[1].requires_grad_(False)
             for layer_id in layers:
-                if str(layer_id) in param[0]:
+                if str(layer_id) == param[0].split(".")[2]:
                     print(param[0])
                     param[1].requires_grad_(True)
         else:

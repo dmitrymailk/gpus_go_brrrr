@@ -26,7 +26,9 @@ if __name__ == "__main__":
     random_seed()
     model_name = "Open-Orca/Mistral-7B-OpenOrca"
     lora_model_name = "ebany_research/llm_lora/models/"
-    lora_model_name += "openorca_lora_[17][11_17_22_26][11c_17_22_26c]"
+    lora_model_name += (
+        "openorca_lora_[17][11_17_22_26][11c_17_22_26c][11_17c_22_26][6_11_14_17_22_26][6c_11_14c_17_22_26]"
+    )
 
     config = AutoConfig.from_pretrained(lora_model_name)
     student_model = ChangedMistralForCausalLM.from_pretrained(
@@ -61,7 +63,11 @@ if __name__ == "__main__":
         mlm=False,
     )
 
-    callibration_layers = [17]
+    callibration_layers = [
+        11,
+        17,
+        22,
+    ]
 
     freeze_params(
         student_model,
@@ -78,11 +84,11 @@ if __name__ == "__main__":
         else:
             layers_names.append(f"{layer_id}")
     layers_names = "_".join(layers_names)
-    print(layers_names)
     save_path += layers_names
     save_path += "]"
+    print(save_path)
 
-    max_steps = 2
+    max_steps = 10
     training_args = TrainingArguments(
         output_dir=save_path,
         evaluation_strategy="steps",
@@ -109,4 +115,4 @@ if __name__ == "__main__":
 
     # print(trainer.evaluate())
     result = trainer.train()
-    trainer.save_model()
+    # trainer.save_model()
