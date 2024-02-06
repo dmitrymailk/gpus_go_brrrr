@@ -23,11 +23,11 @@ from ebany_research.llm_lora.changed_mistral import (
 )
 
 if __name__ == "__main__":
-    random_seed()
+    # random_seed()
     model_name = "Open-Orca/Mistral-7B-OpenOrca"
     lora_model_name = "ebany_research/llm_lora/models/"
     lora_model_name += (
-        "openorca_lora_[17][11_17_22_26][11c_17_22_26c][11_17c_22_26][6_11_14_17_22_26][6c_11_14c_17_22_26]"
+        "52[6c_11c_14_17c_20c_22c_25c_26][6_10_11_14_17_20_22_25_26_30]"
     )
 
     config = AutoConfig.from_pretrained(lora_model_name)
@@ -62,11 +62,18 @@ if __name__ == "__main__":
         tokenizer=tokenizer,
         mlm=False,
     )
-
+    # [6c_11c_14_17c_20c_22c_25c_26]
+    # 52[6_10_11_14_17_20_22_25_26_30]
     callibration_layers = [
-        11,
-        17,
-        22,
+       10,
+       6, 
+       11,
+       14,
+       17,
+       25,
+       22,
+       26,
+       30,
     ]
 
     freeze_params(
@@ -88,7 +95,7 @@ if __name__ == "__main__":
     save_path += "]"
     print(save_path)
 
-    max_steps = 10
+    max_steps = 20
     training_args = TrainingArguments(
         output_dir=save_path,
         evaluation_strategy="steps",

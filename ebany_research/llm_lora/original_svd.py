@@ -123,7 +123,7 @@ if __name__ == "__main__":
     random_seed()
     model_name = "Open-Orca/Mistral-7B-OpenOrca"
     lora_model_name = "ebany_research/llm_lora/models/"
-    lora_model_name += "openorca_lora_[17][11_17_22_26][11c_17_22_26c][11_17c_22_26]"
+    lora_model_name += "openorca_lora_[17][11_17_22_26][11c_17_22_26c][11_17c_22_26][6_11_14_17_22_26][6c_11_14c_17_22_26][6_11c_14_17c_22c_26][6_11_14_17_20_22_25_26][6c_11c_14_17c_20c_22c_25c_26]"
     config = AutoConfig.from_pretrained(lora_model_name)
     device = 0
     teacher_model = MistralForCausalLM.from_pretrained(
@@ -133,7 +133,6 @@ if __name__ == "__main__":
         attn_implementation="flash_attention_2",
     )
     teacher_model = teacher_model.eval()
-    print(count_parameters(teacher_model))
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
     tokenizer.pad_token = tokenizer.eos_token
@@ -164,10 +163,10 @@ if __name__ == "__main__":
     # test
     next(iter(valid_dataloader))
     # 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 [17] 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32
-    # [11_17c_22_26]
+    # 1 2 3 4 5 [6] 7 8 9 10 [11] 12 13 [14] 15 16 [17] 18 19 [20] 21 [22] 23 24 [25] [26] 27 28 29 30 31 32
     distill_layers = [
-        6,
-        14,
+        30,
+        10,
     ]
     config.lora_layers = config.lora_layers + distill_layers
 
@@ -233,8 +232,8 @@ if __name__ == "__main__":
 
     # teacher_loss = eval_model(teacher_model)
     # print("teacher_loss", teacher_loss, torch.exp(torch.tensor(teacher_loss)))
-    # student_loss = eval_model(student_model)
-    # print("student_loss", student_loss, torch.exp(torch.tensor(student_loss)))
+    student_loss = eval_model(student_model)
+    print("student_loss", student_loss, torch.exp(torch.tensor(student_loss)))
 
     name = lora_model_name.split("[")[-1][:-1]
     name = name.split("_")
