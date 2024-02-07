@@ -16,11 +16,13 @@ from ebany_research.llm_lora.original_svd import (
     OpenOrcaDataset,
     assign_new_weights,
     get_L_R,
+    pad_datacollator,
 )
 from ebany_research.llm_lora.changed_mistral import (
     LinearLora,
     ChangedMistralForCausalLM,
 )
+from functools import partial
 
 if __name__ == "__main__":
     random_seed()
@@ -88,7 +90,10 @@ if __name__ == "__main__":
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=valid_dataset,
-        data_collator=pad_datacollator,
+        data_collator=partial(
+            pad_datacollator,
+            tokenizer=tokenizer,
+        ),
     )
     result = trainer.evaluate()
     print(

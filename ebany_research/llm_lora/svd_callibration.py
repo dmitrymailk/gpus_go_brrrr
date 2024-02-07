@@ -16,19 +16,21 @@ from ebany_research.llm_lora.original_svd import (
     OpenOrcaDataset,
     assign_new_weights,
     get_L_R,
+    pad_datacollator,
 )
 from ebany_research.llm_lora.changed_mistral import (
     LinearLora,
     ChangedMistralForCausalLM,
 )
+from functools import partial
 
 if __name__ == "__main__":
-    # random_seed()
+    seed = random.randint(0, 2**31 - 1)
+    random_seed(seed=seed)
+
     model_name = "Open-Orca/Mistral-7B-OpenOrca"
     lora_model_name = "ebany_research/llm_lora/models/"
-    lora_model_name += (
-        "52[6c_11c_14_17c_20c_22c_25c_26][6_10_11_14_17_20_22_25_26_30]"
-    )
+    lora_model_name += "openorca_lora_[17]"
 
     config = AutoConfig.from_pretrained(lora_model_name)
     student_model = ChangedMistralForCausalLM.from_pretrained(
@@ -37,6 +39,7 @@ if __name__ == "__main__":
         attn_implementation="flash_attention_2",
         torch_dtype=torch.bfloat16,
     )
+    print(count_parameters(student_model))
     tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -44,12 +47,11 @@ if __name__ == "__main__":
     dataset = load_dataset("dim/openaccess-ai-collective-oo-gpt4-filtered")
     # dataset = dataset["train"].to_list()
 
-    train_elements = 10000
     valid_elements = 1000
     batch_size = 2
 
     train_dataset = OpenOrcaDataset(
-        dataset=dataset["train"].to_list()[:train_elements],
+        dataset=dataset["train"].to_list(),
         tokenizer=tokenizer,
     )
 
@@ -58,22 +60,8 @@ if __name__ == "__main__":
         tokenizer=tokenizer,
     )
 
-    pad_datacollator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer,
-        mlm=False,
-    )
-    # [6c_11c_14_17c_20c_22c_25c_26]
-    # 52[6_10_11_14_17_20_22_25_26_30]
     callibration_layers = [
-       10,
-       6, 
-       11,
-       14,
-       17,
-       25,
-       22,
-       26,
-       30,
+        17,
     ]
 
     freeze_params(
@@ -95,7 +83,7 @@ if __name__ == "__main__":
     save_path += "]"
     print(save_path)
 
-    max_steps = 20
+    max_steps = 100
     training_args = TrainingArguments(
         output_dir=save_path,
         evaluation_strategy="steps",
@@ -117,7 +105,10 @@ if __name__ == "__main__":
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=valid_dataset,
-        data_collator=pad_datacollator,
+        data_collator=partial(
+            pad_datacollator,
+            tokenizer=tokenizer,
+        ),
     )
 
     # print(trainer.evaluate())

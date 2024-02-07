@@ -4,6 +4,10 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import DataCollatorWithPadding, DataCollatorForLanguageModeling
 
+import abc
+from transformers import BatchEncoding, PreTrainedTokenizer
+from typing import Dict, List, Tuple, Union
+
 from torch.utils.data import Dataset, DataLoader
 from transformers import DataCollatorWithPadding, DataCollatorForLanguageModeling
 import numpy as np
@@ -15,12 +19,133 @@ from ebany_research.llm_lora.changed_mistral import (
     LinearLora,
     ChangedMistralForCausalLM,
 )
+import sys
+from functools import partial
 
 
 def random_seed(seed=42, rank=0):
     torch.manual_seed(seed + rank)
     np.random.seed(seed + rank)
     random.seed(seed + rank)
+
+
+class OpenOrcaSystemDataPrompter:
+    """
+    Alpaca Style Prompter that uses system prompts from the dataset, with OpenOrca prompts
+    """
+
+    def get_prompt(
+        self,
+        instruction="",
+        system="",
+    ):
+        self.instruction_prompt = (
+            f"<|im_start|>user\n{instruction}<|im_end|>\n<|im_start|>assistant\n"
+        )
+        self.system_prompt = f"<|im_start|>system\n{system}<|im_end|>\n"
+        return self.system_prompt + self.instruction_prompt
+
+
+class PromptTokenizingStrategy(abc.ABC):
+    """
+    Abstract class for tokenizing strategies
+    """
+
+    def __init__(
+        self,
+        prompter=None,
+        tokenizer=None,
+        train_on_inputs: bool = False,
+        sequence_len: int = 2048,
+    ):
+        self.prompter = prompter
+        self.tokenizer: PreTrainedTokenizer = tokenizer
+        self.train_on_inputs = train_on_inputs
+        # sequence_len and max_length can be different for CompletionPromptTokenizingStrategy.
+        # TODO: Document how they are different.
+        self.sequence_len = sequence_len
+        self.max_length = sequence_len
+
+        self.prompter = OpenOrcaSystemDataPrompter()
+
+    @abc.abstractmethod
+    def tokenize_prompt(self, prompt):
+        pass
+
+    @property
+    def supports_batched(self):
+        return False
+
+    def _tokenize(
+        self, prompt: str, add_eos_token: bool = True, strip_bos_token: bool = False
+    ) -> BatchEncoding:
+        empty = BatchEncoding(data={"input_ids": [], "attention_mask": []})
+        if not prompt:
+            print("Empty text requested for tokenization.")
+            return empty
+
+        result = self.tokenizer(
+            prompt,
+            truncation=True,
+            max_length=self.max_length,
+            padding=False,
+            return_tensors=None,
+        )
+        if len(result["input_ids"]) == 0:
+            print("Tokenizer result is empty. You may want to audit your dataset")
+            return empty
+
+        if (
+            result["input_ids"][-1] != self.tokenizer.eos_token_id
+            and len(result["input_ids"]) < self.max_length
+            and add_eos_token
+        ):
+            result["input_ids"].append(self.tokenizer.eos_token_id)
+            result["attention_mask"].append(1)
+
+        if result["input_ids"][0] == self.tokenizer.bos_token_id and strip_bos_token:
+            result["input_ids"] = result["input_ids"][1:]
+            result["attention_mask"] = result["attention_mask"][1:]
+
+        result["labels"] = result["input_ids"].copy()
+        return result
+
+
+class InstructionPromptTokenizingStrategy(PromptTokenizingStrategy):
+    """
+    Tokenizing strategy for instruction-based prompts.
+    """
+
+    def parse_instruction_fields(
+        self, prompt
+    ) -> Union[Tuple[str, str, str], Tuple[str, str, str, str]]:
+        return (prompt["system_prompt"], prompt["question"], prompt["response"])
+
+    def tokenize_prompt(self, prompt):
+        (
+            instruction,
+            input,  # pylint: disable=redefined-builtin
+            response,
+        ) = self.parse_instruction_fields(prompt)
+
+        user_prompt = self.prompter.get_prompt(
+            instruction=input,
+            system=instruction,
+        )
+        tokenized_prompt = self._tokenize(user_prompt, add_eos_token=False)
+        if not self.train_on_inputs:
+            user_prompt_len = len(tokenized_prompt["input_ids"])
+            # TODO this could be sped up using numpy array slicing
+            tokenized_prompt["labels"] = [-100] * user_prompt_len
+
+        tokenized_res_prompt = self._tokenize(
+            response, strip_bos_token=True, add_eos_token=True
+        )
+        tokenized_prompt["input_ids"] += tokenized_res_prompt["input_ids"]
+        tokenized_prompt["attention_mask"] += tokenized_res_prompt["attention_mask"]
+        tokenized_prompt["labels"] += tokenized_res_prompt["input_ids"]
+
+        return tokenized_prompt
 
 
 class OpenOrcaDataset(Dataset):
@@ -31,32 +156,15 @@ class OpenOrcaDataset(Dataset):
     ):
         self.dataset = dataset
         self.tokenizer = tokenizer
+        self.prompt_tokenizer = InstructionPromptTokenizingStrategy(tokenizer=tokenizer)
 
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, idx):
         dataset_item = self.dataset[idx]
-        chat = [
-            {"role": "system", "content": dataset_item["system_prompt"]},
-            {"role": "user", "content": dataset_item["question"]},
-            {"role": "assistant", "content": dataset_item["response"]},
-        ]
-        inputs = self.tokenizer.apply_chat_template(
-            chat,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
-        inputs = self.tokenizer(
-            inputs,
-            return_tensors="pt",
-            truncation=True,
-            # max_length=4096,
-            max_length=2048,
-        )
-        for key in inputs.keys():
-            inputs[key] = inputs[key].squeeze(0)
-        # print(inputs['input_ids'].shape)
+        inputs = self.prompt_tokenizer.tokenize_prompt(dataset_item)
+
         return inputs
 
 
@@ -82,8 +190,8 @@ def get_L_R(weights=None, rank=64):
     return L, R
 
 
-def assign_new_weights(original_module, original_weights):
-    L, R = get_L_R(original_weights, rank=16)
+def assign_new_weights(original_module, original_weights, r=16):
+    L, R = get_L_R(original_weights, rank=r)
     original_module.L.weight.data = L
     original_module.R.weight.data = R
 
@@ -119,11 +227,35 @@ def eval_model(model):
     return total_eval_loss
 
 
+def pad_datacollator(batch, tokenizer=None):
+    inputs = {}
+    max_length = 0
+    for item in batch:
+        max_length = max(max_length, len(item["input_ids"]))
+
+    for item in batch:
+        input_ids = item["input_ids"]
+        diff = max_length - len(input_ids)
+        item["input_ids"] = [tokenizer.pad_token_id] * diff + input_ids
+        item["attention_mask"] = [0] * diff + item["attention_mask"]
+        item["labels"] = [-100] * diff + item["labels"]
+        for key in item.keys():
+            if key in inputs:
+                inputs[key].append(item[key])
+            else:
+                inputs[key] = [item[key]]
+
+    for key in inputs.keys():
+        inputs[key] = torch.tensor(inputs[key])
+
+    return inputs
+
+
 if __name__ == "__main__":
-    random_seed()
     model_name = "Open-Orca/Mistral-7B-OpenOrca"
     lora_model_name = "ebany_research/llm_lora/models/"
-    lora_model_name += "openorca_lora_[17][11_17_22_26][11c_17_22_26c][11_17c_22_26][6_11_14_17_22_26][6c_11_14c_17_22_26][6_11c_14_17c_22c_26][6_11_14_17_20_22_25_26][6c_11c_14_17c_20c_22c_25c_26]"
+    lora_model_name += "openorca_lora_[17][17c]"
+    # lora_model_name = model_name
     config = AutoConfig.from_pretrained(lora_model_name)
     device = 0
     teacher_model = MistralForCausalLM.from_pretrained(
@@ -148,27 +280,28 @@ if __name__ == "__main__":
         tokenizer=tokenizer,
     )
 
-    pad_datacollator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer,
-        mlm=False,
-    )
-
     valid_dataloader = DataLoader(
         dataset=valid_dataset,
         batch_size=batch_size,
-        collate_fn=pad_datacollator,
+        collate_fn=partial(
+            pad_datacollator,
+            tokenizer=tokenizer,
+        ),
         shuffle=False,
     )
 
     # test
     next(iter(valid_dataloader))
-    # 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 [17] 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32
-    # 1 2 3 4 5 [6] 7 8 9 10 [11] 12 13 [14] 15 16 [17] 18 19 [20] 21 [22] 23 24 [25] [26] 27 28 29 30 31 32
+    
+    # 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 [17] 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32    
     distill_layers = [
-        30,
-        10,
+        11,
+        17,
+        22,
+        26,
     ]
-    config.lora_layers = config.lora_layers + distill_layers
+    r = 256
+    config.lora_layers = config.to_dict().get('lora_layers', []) + distill_layers
 
     device = 1
     student_model = ChangedMistralForCausalLM.from_pretrained(
@@ -195,30 +328,36 @@ if __name__ == "__main__":
         lora_gate_proj = LinearLora(
             in_dim=config.hidden_size,
             out_dim=config.intermediate_size,
+            r=r,
             bias=False,
         )
         lora_up_proj = LinearLora(
             in_dim=config.hidden_size,
             out_dim=config.intermediate_size,
+            r=r,
             bias=False,
         )
         lora_down_proj = LinearLora(
             in_dim=config.intermediate_size,
             out_dim=config.hidden_size,
+            r=r,
             bias=False,
         )
 
         assign_new_weights(
             original_module=lora_gate_proj,
             original_weights=student_gate_proj,
+            r=r,
         )
         assign_new_weights(
             original_module=lora_up_proj,
             original_weights=student_up_proj,
+            r=r,
         )
         assign_new_weights(
             original_module=lora_down_proj,
             original_weights=student_down_proj,
+            r=r,
         )
 
         student_model.model.layers[distill_layer].mlp.gate_proj = lora_gate_proj
@@ -234,15 +373,23 @@ if __name__ == "__main__":
     # print("teacher_loss", teacher_loss, torch.exp(torch.tensor(teacher_loss)))
     student_loss = eval_model(student_model)
     print("student_loss", student_loss, torch.exp(torch.tensor(student_loss)))
-
-    name = lora_model_name.split("[")[-1][:-1]
-    name = name.split("_")
-    name = [int(item.replace("c", "")) for item in name]
-    name.extend(distill_layers)
-    name = sorted(name)
-    config.lora_layers = name
-    name = [str(item) for item in name]
-    name = "_".join(name)
-    lora_model_name += f"[{name}]"
-    print(lora_model_name)
-    student_model.save_pretrained(lora_model_name)
+    if "[" in lora_model_name:
+        name = lora_model_name.split("[")[-1][:-1]
+        name = name.split("_")
+        name = [int(item.replace("c", "")) for item in name]
+        name.extend(distill_layers)
+        name = sorted(list(set(name)))
+        config.lora_layers = name
+        name = [str(item) for item in name]
+        name = "_".join(name)
+        lora_model_name += f"[{name}]"
+        print(lora_model_name)
+    else:
+        name = sorted(list(set(distill_layers)))
+        config.lora_layers = name
+        name = [str(item) for item in name]
+        name = "_".join(name)
+        lora_model_name = "ebany_research/llm_lora/models/"
+        lora_model_name += f"openorca_lora_[{name}]"
+    print(lora_model_name)    
+    # student_model.save_pretrained(lora_model_name)
