@@ -1,3 +1,7 @@
+import os
+
+os.environ["WANDB_PROJECT"] = "llm_svd"
+
 from transformers import AutoTokenizer, AutoConfig
 from datasets import load_dataset
 import torch
@@ -30,7 +34,7 @@ if __name__ == "__main__":
 
     model_name = "Open-Orca/Mistral-7B-OpenOrca"
     lora_model_name = "ebany_research/llm_lora/models/"
-    lora_model_name += "openorca_lora_[17]"
+    lora_model_name += "40[11c_13c_14c_15c_16c_17c_18c_19c_20c_21c_22c_24c_26c_28c][11_12_13_14_15_16_17_18_19_20_21_22_24_25_26_27_28]"
 
     config = AutoConfig.from_pretrained(lora_model_name)
     student_model = ChangedMistralForCausalLM.from_pretrained(
@@ -61,7 +65,24 @@ if __name__ == "__main__":
     )
 
     callibration_layers = [
+        13,
+        11,
         17,
+        22,
+        26,
+        18,
+        15,
+        20,
+        24,
+        28,
+        14,
+        16,
+        19,
+        21,
+        12,
+        25,
+        25,
+        27,
     ]
 
     freeze_params(
@@ -73,7 +94,7 @@ if __name__ == "__main__":
     save_path = lora_model_name
     save_path += "["
     layers_names = []
-    for layer_id in sorted(config.lora_layers):
+    for layer_id in sorted(list(set(config.lora_layers))):
         if layer_id in callibration_layers:
             layers_names.append(f"{layer_id}c")
         else:
@@ -83,16 +104,17 @@ if __name__ == "__main__":
     save_path += "]"
     print(save_path)
 
-    max_steps = 100
+    max_steps = 1000
     training_args = TrainingArguments(
         output_dir=save_path,
         evaluation_strategy="steps",
         save_strategy="no",
         num_train_epochs=1,
         max_steps=max_steps,
-        report_to="none",
-        # report_to="wandb",
-        logging_steps=max_steps,
+        # report_to="none",
+        report_to="wandb",
+        logging_steps=2,
+        eval_steps=max_steps,
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
         gradient_accumulation_steps=16,
@@ -113,4 +135,4 @@ if __name__ == "__main__":
 
     # print(trainer.evaluate())
     result = trainer.train()
-    # trainer.save_model()
+    trainer.save_model()

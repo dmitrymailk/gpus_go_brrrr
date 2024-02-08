@@ -205,7 +205,7 @@ class MistralMLP(nn.Module):
         self.layer_idx = layer_idx
 
         if self.layer_idx in config.lora_layers:
-            r = 256
+            r = 16
             self.gate_proj = LinearLora(
                 self.hidden_size,
                 self.intermediate_size,

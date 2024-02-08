@@ -254,7 +254,7 @@ def pad_datacollator(batch, tokenizer=None):
 if __name__ == "__main__":
     model_name = "Open-Orca/Mistral-7B-OpenOrca"
     lora_model_name = "ebany_research/llm_lora/models/"
-    lora_model_name += "openorca_lora_[17][17c]"
+    lora_model_name += "40[11c_13c_14c_15c_16c_17c_18c_19c_20c_21c_22c_24c_26c_28c]"
     # lora_model_name = model_name
     config = AutoConfig.from_pretrained(lora_model_name)
     device = 0
@@ -293,14 +293,15 @@ if __name__ == "__main__":
     # test
     next(iter(valid_dataloader))
     
-    # 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 [17] 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32    
+    # 1 2 3 4 5 6 7 8 9 10 [11] 12 [13] [14] [15] [16] [17] [18] [19] [20] [21] [22] 23 [24] 25 [26] 27 [28] 29 30 31 32    
+    # 11c_13c_14c_15c_16c_17c_18c_19c_20c_21c_22c_24c_26c_28c
     distill_layers = [
-        11,
-        17,
-        22,
-        26,
+      12,
+      25,
+      25,
+      27,
     ]
-    r = 256
+    r = 16
     config.lora_layers = config.to_dict().get('lora_layers', []) + distill_layers
 
     device = 1
@@ -383,7 +384,6 @@ if __name__ == "__main__":
         name = [str(item) for item in name]
         name = "_".join(name)
         lora_model_name += f"[{name}]"
-        print(lora_model_name)
     else:
         name = sorted(list(set(distill_layers)))
         config.lora_layers = name
@@ -392,4 +392,4 @@ if __name__ == "__main__":
         lora_model_name = "ebany_research/llm_lora/models/"
         lora_model_name += f"openorca_lora_[{name}]"
     print(lora_model_name)    
-    # student_model.save_pretrained(lora_model_name)
+    student_model.save_pretrained(lora_model_name)
