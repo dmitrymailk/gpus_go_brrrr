@@ -188,10 +188,40 @@ class LinearLora(torch.nn.Module):
         super().__init__()
         self.R = torch.nn.Linear(in_dim, r, bias=bias)
         self.L = torch.nn.Linear(r, out_dim, bias=bias)
+        """
+        W - in_dim x out_dim
+        R - in_dim x r
+        L - r x out_dim
+        
+        (L @ R) = W
+        Linear =  x @ W.T = x @ (L @ R).T
+        = x @ R.T @ L.T
+        """
 
     def forward(self, hidden_states):
         hidden_states = self.R(hidden_states)
         hidden_states = self.L(hidden_states)
+        return hidden_states
+
+
+class LinearLora_(torch.nn.Module):
+    def __init__(self, in_dim=(1, 224, 64), out_dim=(1, 64, 64), r=16, bias=False):
+        super().__init__()
+        self.a_hat = torch.nn.Parameter(torch.empty(in_dim), requires_grad=True)
+        self.b_hat = torch.nn.Parameter(torch.empty(out_dim), requires_grad=True)
+
+        self.a_hat.data.normal_(mean=0.0, std=0.02)
+        self.b_hat.data.normal_(mean=0.0, std=0.02)
+
+    def forward(self, hidden_states):
+        self.b_hat.to(torch.float32)
+        self.a_hat.to(torch.float32)
+        hidden_states = hidden_states.to(torch.float32)
+        W = torch.kron(self.b_hat, self.a_hat).sum(0)
+        hidden_states = hidden_states @ W.T
+        self.b_hat.to(torch.bfloat16)
+        self.a_hat.to(torch.bfloat16)
+        hidden_states = hidden_states.to(torch.bfloat16)
         return hidden_states
 
 
@@ -205,7 +235,7 @@ class MistralMLP(nn.Module):
         self.layer_idx = layer_idx
 
         if self.layer_idx in config.lora_layers:
-            r = 16
+            r = 1024
             self.gate_proj = LinearLora(
                 self.hidden_size,
                 self.intermediate_size,

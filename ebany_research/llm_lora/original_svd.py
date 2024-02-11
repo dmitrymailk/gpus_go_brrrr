@@ -21,6 +21,11 @@ from ebany_research.llm_lora.changed_mistral import (
 )
 import sys
 from functools import partial
+from scipy.sparse.linalg import svds
+from ebany_research.llm_lora.generalized_kronecker_product_decomposition.gkpd import (
+    gkpd,
+    kron,
+)
 
 
 def random_seed(seed=42, rank=0):
@@ -194,6 +199,51 @@ def assign_new_weights(original_module, original_weights, r=16):
     L, R = get_L_R(original_weights, rank=r)
     original_module.L.weight.data = L
     original_module.R.weight.data = R
+    # original_module.L.data = L.T
+    # original_module.R.data = R.T
+    # original_module.L1.data = L
+    # original_module.R1.data = R
+
+
+def assign_new_weights_kron(original_module, original_weights, r=16):
+    m1, m2 = 224, 64
+    n1, n2 = 64, 64
+    a_shape = (m1, n1)
+    b_shape = (m2, n2)
+    if original_weights.shape[0] == 4096:
+        m1, m2 = 64, 64
+        n1, n2 = 64, 224
+
+        a_shape = (m1, n1)
+        b_shape = (m2, n2)
+    a_hat, b_hat = gkpd(original_weights, a_shape, b_shape)
+    original_module.a_hat.data = a_hat
+    original_module.b_hat.data = b_hat
+
+
+def kronecker(original_module, original_weights):
+    """
+    https://core.ac.uk/download/pdf/82128039.pdf
+    """
+    U, S, Vh = torch.linalg.svd(
+        original_weights.to(torch.float32),
+        full_matrices=False,
+    )
+
+    rank = 1
+    U = U[:, :rank]
+    S = S[:rank]
+    Vh = Vh[:rank, :]
+
+    m, n = original_weights.shape[0], original_weights.shape[1]
+    m1, m2 = m // 16, 16
+    n1, n2 = 16, n // 16
+
+    B = (U[:, :1] * S[0].sqrt()).view(m1, n1)
+    C = (Vh[:1, :] * S[0].sqrt()).view(m2, n2)
+
+    original_module.B.weight.data = B
+    original_module.C.weight.data = C
 
 
 def freeze_params(model, layers=None):
@@ -204,8 +254,24 @@ def freeze_params(model, layers=None):
                 if str(layer_id) == param[0].split(".")[2]:
                     print(param[0])
                     param[1].requires_grad_(True)
+
+        if "hat" in param[0]:
+            param[1].requires_grad_(False)
+            for layer_id in layers:
+                if str(layer_id) == param[0].split(".")[2]:
+                    print(param[0])
+                    param[1].requires_grad_(True)
         else:
             param[1].requires_grad_(False)
+
+def unfreeze_params(model, layers=None):
+    for param in model.named_parameters():
+        if "L" in param[0] or "R" in param[0]:
+            param[1].requires_grad_(False)
+            for layer_id in layers:
+                if str(layer_id) == param[0].split(".")[2]:
+                    print(param[0])
+                    param[1].requires_grad = True
 
 
 def eval_model(model):
@@ -253,9 +319,9 @@ def pad_datacollator(batch, tokenizer=None):
 
 if __name__ == "__main__":
     model_name = "Open-Orca/Mistral-7B-OpenOrca"
-    lora_model_name = "ebany_research/llm_lora/models/"
-    lora_model_name += "40[11c_13c_14c_15c_16c_17c_18c_19c_20c_21c_22c_24c_26c_28c]"
-    # lora_model_name = model_name
+    # lora_model_name = "ebany_research/llm_lora/models/"
+    # lora_model_name += "40[11c_13c_14c_15c_16c_17c_18c_19c_20c_21c_22c_24c_26c_28c]"
+    lora_model_name = model_name
     config = AutoConfig.from_pretrained(lora_model_name)
     device = 0
     teacher_model = MistralForCausalLM.from_pretrained(
@@ -292,17 +358,10 @@ if __name__ == "__main__":
 
     # test
     next(iter(valid_dataloader))
-    
-    # 1 2 3 4 5 6 7 8 9 10 [11] 12 [13] [14] [15] [16] [17] [18] [19] [20] [21] [22] 23 [24] 25 [26] 27 [28] 29 30 31 32    
-    # 11c_13c_14c_15c_16c_17c_18c_19c_20c_21c_22c_24c_26c_28c
-    distill_layers = [
-      12,
-      25,
-      25,
-      27,
-    ]
-    r = 16
-    config.lora_layers = config.to_dict().get('lora_layers', []) + distill_layers
+
+    distill_layers = [17]
+    r = 1024
+    config.lora_layers = config.to_dict().get("lora_layers", []) + distill_layers
 
     device = 1
     student_model = ChangedMistralForCausalLM.from_pretrained(
@@ -346,16 +405,19 @@ if __name__ == "__main__":
         )
 
         assign_new_weights(
+            # assign_new_weights_kron(
             original_module=lora_gate_proj,
             original_weights=student_gate_proj,
             r=r,
         )
         assign_new_weights(
+            # assign_new_weights_kron(
             original_module=lora_up_proj,
             original_weights=student_up_proj,
             r=r,
         )
         assign_new_weights(
+            # assign_new_weights_kron(
             original_module=lora_down_proj,
             original_weights=student_down_proj,
             r=r,
@@ -372,8 +434,8 @@ if __name__ == "__main__":
 
     # teacher_loss = eval_model(teacher_model)
     # print("teacher_loss", teacher_loss, torch.exp(torch.tensor(teacher_loss)))
-    student_loss = eval_model(student_model)
-    print("student_loss", student_loss, torch.exp(torch.tensor(student_loss)))
+    # student_loss = eval_model(student_model)
+    # print("student_loss", student_loss, torch.exp(torch.tensor(student_loss)))
     if "[" in lora_model_name:
         name = lora_model_name.split("[")[-1][:-1]
         name = name.split("_")
@@ -391,5 +453,5 @@ if __name__ == "__main__":
         name = "_".join(name)
         lora_model_name = "ebany_research/llm_lora/models/"
         lora_model_name += f"openorca_lora_[{name}]"
-    print(lora_model_name)    
+    print(lora_model_name)
     student_model.save_pretrained(lora_model_name)

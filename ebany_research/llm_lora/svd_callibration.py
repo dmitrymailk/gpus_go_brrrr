@@ -15,6 +15,7 @@ from transformers import Trainer, TrainingArguments
 
 from ebany_research.llm_lora.original_svd import (
     freeze_params,
+    unfreeze_params,
     count_parameters,
     random_seed,
     OpenOrcaDataset,
@@ -27,6 +28,7 @@ from ebany_research.llm_lora.changed_mistral import (
     ChangedMistralForCausalLM,
 )
 from functools import partial
+from peft import LoraModel, LoraConfig, prepare_model_for_int8_training, get_peft_model
 
 if __name__ == "__main__":
     seed = random.randint(0, 2**31 - 1)
@@ -34,19 +36,59 @@ if __name__ == "__main__":
 
     model_name = "Open-Orca/Mistral-7B-OpenOrca"
     lora_model_name = "ebany_research/llm_lora/models/"
-    lora_model_name += "40[11c_13c_14c_15c_16c_17c_18c_19c_20c_21c_22c_24c_26c_28c][11_12_13_14_15_16_17_18_19_20_21_22_24_25_26_27_28]"
+    lora_model_name += "openorca_lora_[17]"
 
     config = AutoConfig.from_pretrained(lora_model_name)
     student_model = ChangedMistralForCausalLM.from_pretrained(
         lora_model_name,
         device_map={"": 0},
         attn_implementation="flash_attention_2",
-        torch_dtype=torch.bfloat16,
+        torch_dtype=torch.float16,
+        load_in_8bit=True,
     )
+    student_model = prepare_model_for_int8_training(student_model)
     print(count_parameters(student_model))
     tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.pad_token_id = tokenizer.eos_token_id
+
+    target_modules = []
+    modules = [
+        "gate_proj",
+        "up_proj",
+        "down_proj",
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+    ]
+    for param in student_model.named_parameters():
+        if "L" in param[0] or "R" in param[0]:
+            continue
+        else:
+            for mod in modules:
+                if mod in param[0]:
+                    target_modules.append(param[0].replace(".weight", ""))
+    # target_modules.append('R')
+    # target_modules.append('L')
+
+    lora_config = LoraConfig(
+        task_type="CAUSAL_LM",
+        r=64,
+        lora_alpha=8,
+        # target_modules=[
+        #     "gate_proj",
+        #     "up_proj",
+        #     "down_proj",
+        #     "q_proj",
+        #     "k_proj",
+        #     "v_proj",
+        #     "o_proj",
+        # ],
+        target_modules=target_modules,
+        lora_dropout=0.0,
+        bias="none",
+    )
 
     dataset = load_dataset("dim/openaccess-ai-collective-oo-gpt4-filtered")
     # dataset = dataset["train"].to_list()
@@ -65,30 +107,20 @@ if __name__ == "__main__":
     )
 
     callibration_layers = [
-        13,
-        11,
         17,
-        22,
-        26,
-        18,
-        15,
-        20,
-        24,
-        28,
-        14,
-        16,
-        19,
-        21,
-        12,
-        25,
-        25,
-        27,
     ]
 
-    freeze_params(
-        student_model,
-        layers=callibration_layers,
-    )
+    # freeze_params(
+    #     student_model,
+    #     layers=callibration_layers,
+    # )
+    student_model = get_peft_model(student_model, lora_config, )
+    # unfreeze_params(
+    #     student_model,
+    #     layers=callibration_layers,
+    # )
+    print([param[0] for param in student_model.named_parameters() if param[1].requires_grad])
+    student_model.print_trainable_parameters()
     print(count_parameters(student_model))
 
     save_path = lora_model_name
